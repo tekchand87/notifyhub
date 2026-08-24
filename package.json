@@ -1,0 +1,36 @@
+{
+  "name": "notifyhub",
+  "version": "1.0.0",
+  "description": "A multi-tenant, real-time notification and webhook delivery platform built using event-driven architecture.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": " nodemon src/server.js",
+    "start" : "node src/server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tekchand87/notifyhub.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/tekchand87/notifyhub/issues"
+  },
+  "homepage": "https://github.com/tekchand87/notifyhub#readme",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "js": "^0.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.9.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

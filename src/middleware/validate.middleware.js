@@ -1,0 +1,21 @@
+export const validate = (schema)=>{
+  return (req,res,next) =>{
+    const result = schema.safeParse(req.body);
+
+    if(!result.sucess){
+      const errors = result.error.issues.map((issue)=>({
+        filed : issue.path.join("."),
+        message : issue.message
+      }));
+
+      return res.status(400).json({
+        sucess : false,
+        message : "Validation failed",
+        errors
+      });
+    }
+
+    req.body = result.data;
+    next();
+  };
+};
