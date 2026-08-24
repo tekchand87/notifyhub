@@ -38,10 +38,12 @@ export const loginSchema = z.object({
 
 export const changePasswordSchema = z.object({
   currentPassword : z 
-    .trim()
-    .min(1,"CurrentPassword is requirec"),
+    .string()
+    .min(1,"CurrentPassword is required")
+    .trim(),
 
   newPassword : z 
+    .string()
     .trim()
     .min(8,"NewPassword minlength must be 8")
     .max(100,"New Password Cannot exceed 100 Characters")

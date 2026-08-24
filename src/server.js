@@ -4,6 +4,13 @@ import {env} from "./config/env.js"
 
 
 connectMongoDB();
-app.listen(env.PORT,() => {
-  console.log(`Server is running on the port ${env.PORT}`);
-});
+
+const startServer = async()=>{
+  await connectMongoDB();
+
+  app.listen(env.PORT,() => {
+    console.log(`NotiyHub API running on port ${env.PORT}`);
+  });
+};
+
+startServer();
