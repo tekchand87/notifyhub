@@ -2,6 +2,7 @@ import * as authService from "./auth.service.js"
 
 export const register = async (req,res,next)=>{
   try{
+    const result = await authService.register(req.body);
     return res.status(201).json({
       success : true,
       message : "Registration successful",
@@ -46,7 +47,7 @@ export const changePassword = async(req,res,next)=>{
 
     return res.status(200).json({
       sucess : true,
-      resutl
+      result
     });
   }catch(error){
     next(error);

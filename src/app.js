@@ -7,12 +7,12 @@ import {errorHandler} from "./middleware/error.middleware.js"
 
 const app = express();
 
-app.use(cors);
+app.use(cors());
 app.use(express.json());
 
-app.get("/health",(res,req)=>{
+app.get("/health",(req,res)=>{
   res.status(200).json({
-    sucess : true,
+    success : true,
     message :"NotifyHub API is running"
   });
 });

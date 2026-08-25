@@ -3,9 +3,9 @@ import {env} from "../config/env.js"
 
 export const generateAccessToken = (user)=>{
   return jwt.sign({
-    userId : user._Id.toString(),
+    userId : user._id.toString(),
     tenantId : user.tenantId.toString(),
-    roler : user.role
+    role : user.role
   },
   env.JWT_SECRET,
   {

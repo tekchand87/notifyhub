@@ -33,7 +33,7 @@ export const register  = async ({name,email,password,tenantName})=>{
   const user = await User.create({
     name,
     email,
-    passwordHash,
+    passwordHash:HashPassword,
     tenantId: tenant._id,
     role : USER_ROLES.TENANT_ADMIN
   });
@@ -57,7 +57,7 @@ export const login = async({email,password})=>{
     throw new AppError("Invalid Email or password ",409);
   }
 
-  const passwordMatch = await bcrypt.compare(password,user.HashPassword);
+  const passwordMatch = await bcrypt.compare(password,user.passwordHash);
 
   if(!passwordMatch){
     throw new AppError("Invalid Email or Password",401);
@@ -76,14 +76,14 @@ export const login = async({email,password})=>{
 };
 
 export const getCurrentUser = async(userId)=>{
-  const user = await User.findById({userId});
+  const user = await User.findById(userId);
   if(!user){
     throw new AppError("User no Longer Exists",401);
   };
   return toSafeUser(user);
 }
 export const changePassword = async(userId,currentPassword,newPassword)=>{
-  const user = await User.findById({userId})
+  const user = await User.findById(userId)
   .select("+passwordHash");
 
   if(!user){

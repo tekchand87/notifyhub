@@ -9,9 +9,9 @@ import {requireAuth} from "../../middleware/auth.middleware.js"
 
 const router = Router();
 
-router.post("/register",validate(registerSchema),authController.login);
+router.post("/register",validate(registerSchema),authController.register);
 
-router.post("login",validate(loginSchema),authController.login);
+router.post("/login",validate(loginSchema),authController.login);
 
 router.get("/me",requireAuth,authController.getMe);
 
