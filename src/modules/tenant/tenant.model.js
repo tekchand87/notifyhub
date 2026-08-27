@@ -18,7 +18,7 @@ const tenantSchema = new mongoose.Schema(
       lowercase : true,
       minLength : 2,
       maxLength : 100,
-      unique : true,
+      
       immutable : true
     },
     description : {
@@ -38,7 +38,6 @@ const tenantSchema = new mongoose.Schema(
       type : String,
       enum : TENANT_STATUS_VALUES,
       default : "active",
-      index : true
     }
   },{
     timestamps : true,

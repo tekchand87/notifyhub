@@ -29,7 +29,7 @@ export const login = async(req,res,next)=>{
 
 export const getMe = async(req,res,next)=>{
   try{
-    const user = await authService.getCurrentUser(req.user.userId)
+    const user = await authService.getCurrentUser(req.user._id)
 
     return res.status(200).json({
       sucess : true,
@@ -43,7 +43,7 @@ export const getMe = async(req,res,next)=>{
 
 export const changePassword = async(req,res,next)=>{
   try{
-    const result = await authService.changePassword(req.user.userId,req.body.currentPassword,req.body.newPassword);
+    const result = await authService.changePassword(req.user._id,req.body.currentPassword,req.body.newPassword);
 
     return res.status(200).json({
       sucess : true,

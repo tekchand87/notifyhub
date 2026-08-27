@@ -1,4 +1,4 @@
-import z from "zod"
+import {z} from "zod"
 import {USER_ROLES} from "../auth/auth.contants.js"
 
 const optionalText = (maxLength,filedName )=>
@@ -10,16 +10,16 @@ const optionalText = (maxLength,filedName )=>
 export const updateTenantSchema = z
 .object({
   name : z
-    .String()
+    .string()
     .trim()
     .min(2,"Tenant name must be atleast 2 characters")
     .max(100,"Tenant name cannot exceed 100 characters")
     .optional(),
 
-    description : optinoalText(500,"Description").optional(),
+    description : optionalText(500,"Description").optional(),
 
     website : z
-      .String()
+      .string()
       .trim()
       .url("Website must be valid URL")
       .max(2048,"website cannot exceed the 2048 characters")
@@ -33,7 +33,7 @@ export const updateTenantSchema = z
 
 
 export const updateMemberSchema = z
-.Object({
+.object({
   role : z
           .enum([USER_ROLES.TENANT_ADMIN,USER_ROLES.MEMBER])
           .optional(),

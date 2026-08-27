@@ -89,7 +89,7 @@ export const changePassword = async(userId,currentPassword,newPassword)=>{
   .select("+passwordHash");
 
   if(!user){
-    throw AppError("user not found",404);
+    throw new AppError("user not found",404);
   }
 
   const passwordMatches = await bcrypt.compare(currentPassword,user.passwordHash);

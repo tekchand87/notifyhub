@@ -21,7 +21,7 @@ app.get("/health",(req,res)=>{
 });
 
 app.use("/api/v1/auth",authRoutes);
-app.use("api/v1/tenant",tenantRoutes);
+app.use("/api/v1/tenant",tenantRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

@@ -15,7 +15,7 @@ export const requireActiveTenant  = async(req,res,next)=>{
       throw new AppError("This Tenant is not Active and cannot access the platform",403);
     }
 
-    req.tenant = teanant;
+    req.tenant = tenant;
     next();
   }catch(error){
     next(error);
