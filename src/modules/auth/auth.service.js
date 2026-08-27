@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 
 import {User} from "./user.model.js";
 import {Tenant} from "../tenant/tenant.model.js";
+import { buildTenantSlug } from "../../utils/tenantSlug.js";
 import {USER_ROLES} from "./auth.contants.js";
 import {AppError} from "../../utils/AppError.js";
 import {generateAccessToken} from "../../utils/jwt.js";
@@ -25,8 +26,9 @@ export const register  = async ({name,email,password,tenantName})=>{
     throw new AppError("an account with this email already exists",409);
   }
   const tenant  = await Tenant.create({
-    name : tenantName
-  })
+    name : tenantName,
+    slug : buildTenantSlug(tenantName)
+  });
 
   const HashPassword = await bcrypt.hash(password,SALTS_ROUNDS);
 

@@ -6,36 +6,34 @@ export const requireAuth = async(req,res,next)=>{
   try{
     const authorization = req.headers.authorization;
 
-    if(!authorization){
-      throw new AppError("Authorization headers is required",401);
+    if(!authorization?.startsWith("Bearer ")){
+      throw new AppError("Authorization token is required",401);
     }
 
-    const [schema,token] = authorization.split(" ");
+    const token = authorization.slice(7);
 
-    if(schema!=="Bearer" || !token){
-      throw  new AppError("Use Authorization  : Bearer <token>",401);
-    }
-    
     const payload = verifyAccessToken(token);
 
-    const user = await User.findById(payload.userId);
+    const user = await User.findById(payload.userId)
+    .select("name email tenantId role isActive");
 
-    if(!user || !user.isActive){
-      throw new AppError("Authentication fail",401);
+    if(!user){
+      throw new AppError("User account no long exists",401);
     }
-
-    req.user = {
-      userId : user._id.toString(),
-      tenantId : user.tenantId.toString(),
-      role : user.role
-    };
+    if(!user.isActive){
+      throw new AppError("User is not Active",403);
+    }
+    req.user = user;
     next();
   }
   catch(error){
-    return res.status(401).json({
-      sucess : false,
-      message : "Invalid access token"
-    });
+    if(error.name==="TokenExpiredError"){
+      return next(new AppError("Authentication token is expired",401));
+    }
+    if(error.name==="JsonWebTokenError"){
+      return next(new AppError("Invalid authentication token",401));
+    }
+    next(error);
   }
 
 }

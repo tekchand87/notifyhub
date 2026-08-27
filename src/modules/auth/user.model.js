@@ -24,7 +24,8 @@ const userSchema = new mongoose.Schema({
   tenantId : {
     type : mongoose.Schema.Types.ObjectId,
     ref : "Tenant",
-    required : true
+    required : true,
+    index : true
   },
   role : {
     type : String,
@@ -33,10 +34,14 @@ const userSchema = new mongoose.Schema({
   },
   isActive : {
     type : Boolean ,
-    default : true
+    default : true,
+    index : true
   }
 },{
   timestamps: true
 })
+
+userSchema.index({tenantId : 1,createdAt : -1})
+userSchema.index({tenantId : 1 , role : 1, isActive : 1});
 
 export const User = mongoose.model("User",userSchema);
