@@ -4,12 +4,12 @@ export const validate = (schema)=>{
 
     if(!result.success){
       const errors = result.error.issues.map((issue)=>({
-        filed : issue.path.join("."),
+        field : issue.path.join("."),
         message : issue.message
       }));
 
       return res.status(400).json({
-        sucess : false,
+        success : false,
         message : "Validation failed",
         errors
       });

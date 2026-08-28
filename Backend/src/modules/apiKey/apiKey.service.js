@@ -1,4 +1,4 @@
-import {apiKey, apiKey} from "./apiKey.models.js"
+import {apiKey as ApiKey} from "./apiKey.models.js"
 import {AppError} from "../../utils/AppError.js"
 
 import {generateApiKey,hashApiKey} from "../../utils/apiKey.js"
@@ -8,7 +8,7 @@ export const createApiKey = async(tenantId,input)=>{
 
   const keyHash = hashApiKey(rawApiKey);
 
-  const apiKey = await apiKey.create({
+  const createdKey = await ApiKey.create({
     tenantId,
     name : input.name,
     keyPrefix,
@@ -19,48 +19,48 @@ export const createApiKey = async(tenantId,input)=>{
 
   return {
     apiKey : {
-      id : apiKey._id,
-      name : apiKey.name,
-      keyPrefix  : apiKey.keyPrefix,
-      scopes : apiKey.scopes,
-      isActive : apiKey.isActive,
-      expiresAt : apiKey.expiresAt,
-      createdAt : apiKey.createdAt
+      id : createdKey._id,
+      name : createdKey.name,
+      keyPrefix  : createdKey.keyPrefix,
+      scopes : createdKey.scopes,
+      isActive : createdKey.isActive,
+      expiresAt : createdKey.expiresAt,
+      createdAt : createdKey.createdAt
     },
     rawApiKey
   };
 };
 
 export const listApiKeys = async(tenantId)=>{
-  return apiKey.find({tenantId})
+  return ApiKey.find({tenantId})
   .select("name keyPrefix scopes isActive expiresAt lastUsedAt createdAt")
   .sort({createdAt : -1})
   .lean()
 };
 
 export const getApiKey = async(tenantId,apiKeyId)=>{
-  const apiKey = await apiKey.findOne({ _id : apiKeyId,tenantId})
+  const foundKey = await ApiKey.findOne({ _id : apiKeyId,tenantId})
   .select("name keyPrefix scopes isActive expiresAt lastUsedAt createdAt updatedAt")
   .lean()
 
-  if(!apiKey){
+  if(!foundKey){
     throw new AppError("API key is not found",404);
   }
-  return apiKey;
+  return foundKey;
 };
 
 export const revokeApiKey = async(tenantId,apiKeyId)=>{
-  const apikey = await ApiKey.findOne({_id : apiKeyId,tenantId});
+  const foundKey = await ApiKey.findOne({_id : apiKeyId,tenantId});
 
-  if(!apiKey){
+  if(!foundKey){
     throw new AppError("API Key is not found",404);
   }
 
-  if(!apiKey.isActive){
+  if(!foundKey.isActive){
     throw new AppError("API KEY is already Revoked",400);
   }
-  apiKey.isActive = false;
-  apiKey.save();
+  foundKey.isActive = false;
+  await foundKey.save();
 
   return {
     message : "API Key Revoked Successfully"

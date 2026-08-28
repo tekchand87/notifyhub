@@ -4,10 +4,10 @@ import {API_KEY_PREFIX} from "../modules/apiKey/apiKey.constants.js"
 export const generateApiKey = ()=>{
   const secret = crypto.randomBytes(32).toString("hex");
   const rawApiKey = `${API_KEY_PREFIX}${secret}`;
-  const keyprefix = rawApiKey.slice(0,12);
+  const keyPrefix = rawApiKey.slice(0,12);
 
   return {
-    rawApiKey,keyprefix
+    rawApiKey,keyPrefix
   };
 };
 

@@ -18,7 +18,7 @@ export const listApiKeys = async(req,res,next)=>{
   try{
     const result = await apiKeyService.listApiKeys(req.user.tenantId);
     return res.status(200).json({
-      sucess : true,
+      success : true,
       data : result
     });
   }

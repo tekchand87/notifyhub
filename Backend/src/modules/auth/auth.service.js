@@ -1,4 +1,4 @@
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 
 import {User} from "./user.model.js";
 import {Tenant} from "../tenant/tenant.model.js";
@@ -100,7 +100,7 @@ export const changePassword = async(userId,currentPassword,newPassword)=>{
 
   const newPasswordHash = await bcrypt.hash(newPassword,SALTS_ROUNDS);
 
-  user.HashPassword = newPasswordHash;
+  user.passwordHash = newPasswordHash;
   await user.save();
 
   return {

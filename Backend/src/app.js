@@ -3,7 +3,7 @@ import cors from "cors"
 
 import authRoutes from "./modules/auth/auth.routes.js"
 import tenantRoutes from "./modules/tenant/tenant.routes.js"
-import apiRoutes from "./modules/"
+import apiRoutes from "./modules/apiKey/apiKey.routes.js"
 
 import {notFound} from "./middleware/notFound.middleware.js"
 import {errorHandler} from "./middleware/error.middleware.js"
@@ -22,7 +22,7 @@ app.get("/health",(req,res)=>{
 
 app.use("/api/v1/auth",authRoutes);
 app.use("/api/v1/tenant",tenantRoutes);
-app.use("api/v1/api-keys",apiRoutes);
+app.use("/api/v1/api-keys",apiRoutes);
 app.use(notFound);
 app.use(errorHandler);
 

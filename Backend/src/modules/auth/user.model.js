@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { required } from "zod/mini";
+
 
 const userSchema = new mongoose.Schema({
   name : {
@@ -13,7 +13,7 @@ const userSchema = new mongoose.Schema({
     type : String,
     required : true,
     unique : true,
-    trime : true,
+    trim : true,
     lowercase :true
   },
   passwordHash : {

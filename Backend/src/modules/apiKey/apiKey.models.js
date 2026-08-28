@@ -1,6 +1,5 @@
 import mongoose from "mongoose"
-import { maxLength, minLength } from "zod"
-import { required } from "zod/mini"
+
 
 const apiKeySchema = new mongoose.Schema({
   tenantId : {
@@ -45,7 +44,7 @@ const apiKeySchema = new mongoose.Schema({
   }
 },{
   timestamps : true,
-  versionKey : true
+  versionKey : "__v"
 });
 
 apiKeySchema.index({tenantId : 1 , isActive : 1 });

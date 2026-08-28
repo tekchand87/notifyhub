@@ -3,8 +3,6 @@ import {connectMongoDB} from "./database/mongo.js"
 import {env} from "./config/env.js"
 
 
-connectMongoDB();
-
 const startServer = async()=>{
   await connectMongoDB();
 

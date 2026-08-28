@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import {TENANT_STATUS_VALUES} from "./tenant.constants.js"
-import { maxLength, minLength } from "zod";
+
 
 const tenantSchema = new mongoose.Schema(
   {

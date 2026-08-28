@@ -1,4 +1,4 @@
-import {Routes} from "express"
+import {Router} from "express"
 
 // validator
 import {createApiKeySchema} from "./apiKey.validator.js"
@@ -15,7 +15,7 @@ import {USER_ROLES} from "../auth/auth.contants.js"
 // controller
 import {createApiKey,listApiKeys,getApiKey,revokeApiKey} from "./apiKey.controller.js"
 
-const router = Routes();
+const router = Router();
 
 
 // authentication 
@@ -28,6 +28,6 @@ router.get("/",requireRole(USER_ROLES.TENANT_ADMIN),listApiKeys);
 
 router.get("/:apiKeyId",requireRole(USER_ROLES.TENANT_ADMIN),getApiKey);
 
-router.get("/:apiKeyId/revoke",requireRole(USER_ROLES.TENANT_ADMIN),revokeApiKey);
+router.patch("/:apiKeyId/revoke",requireRole(USER_ROLES.TENANT_ADMIN),revokeApiKey);
 
 export default router;

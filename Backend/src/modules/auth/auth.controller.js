@@ -18,7 +18,7 @@ export const login = async(req,res,next)=>{
     const result = await authService.login(req.body);
 
     return res.status(200).json({
-      sucess : true,
+      success : true,
       message : " Login successfull",
       data : result 
     });
@@ -32,9 +32,9 @@ export const getMe = async(req,res,next)=>{
     const user = await authService.getCurrentUser(req.user._id)
 
     return res.status(200).json({
-      sucess : true,
+      success : true,
       message : "Current user fetch successfully",
-      datat : {user}
+      data : {user}
   });
   }catch(error){
     next(error);
@@ -46,7 +46,7 @@ export const changePassword = async(req,res,next)=>{
     const result = await authService.changePassword(req.user._id,req.body.currentPassword,req.body.newPassword);
 
     return res.status(200).json({
-      sucess : true,
+      success : true,
       result
     });
   }catch(error){
