@@ -5,12 +5,10 @@ import * as eventController from "./event.controller.js";
 import {createEventSchema} from "./event.validator.js";
 
 import { validate } from "../../middleware/validate.middleware.js";
-
 import {requireApiKey} from "../../middleware/apiKeyauth.middleware.js";
-
 import {requireApiKeyScope} from "../../middleware/requireApiKeyScope.middleware.js";
-
 import {requireAuth} from "../../middleware/auth.middleware.js";
+
 
 import {EVENT_WRITE_SCOPE} from "./event.constants.js";
 
@@ -37,11 +35,7 @@ router.post(
   Tenant admin
   List Events
 */
-router.get(
-  "/",
-  requireAuth,
-  eventController.listEvents
-);
+router.get("/",requireAuth,eventController.listEvents);
 
 
 /*
