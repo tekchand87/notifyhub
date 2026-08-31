@@ -2,12 +2,11 @@ import mongoose from "mongoose";
 
 import { Event } from "./event.model.js";
 
+import {publishEventToKafka} from "../../infrastructure/kafka/event.publisher.js"
+
 import { AppError } from "../../utils/AppError.js";
 
-export const publishEvent = async (
-  tenantId,
-  input
-) => {
+export const publishEvent = async (tenantId,input) => {
   if (!mongoose.isValidObjectId(tenantId)) {
     throw new AppError(
       "Invalid tenant context",
@@ -22,11 +21,23 @@ export const publishEvent = async (
     payload: input.payload
   });
 
-  return {
-    eventId: event._id,
-    status: event.status,
-    createdAt: event.createdAt
-  };
+  try{
+    const kafkaResult = await publishEventToKafka(event);
+    return {
+      eventId : event._id,
+      status: event.status,
+      createdAt : event.createdAt,
+      kafka : kafkaResult
+    };
+  }
+  catch(error){
+    throw new AppError("Event was saved but could not be published to kafka",503);
+  }
+  // return {
+  //   eventId: event._id,
+  //   status: event.status,
+  //   createdAt: event.createdAt
+  // };
 };
 
 

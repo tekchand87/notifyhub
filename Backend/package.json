@@ -28,6 +28,7 @@
     "express": "^5.2.1",
     "js": "^0.1.0",
     "jsonwebtoken": "^9.0.3",
+    "kafkajs": "^2.2.4",
     "mongoose": "^9.9.3",
     "zod": "^4.4.3"
   },

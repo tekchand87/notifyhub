@@ -27,7 +27,7 @@ router.post(
     EVENT_WRITE_SCOPE
   ),
   validate(createEventSchema),
-  eventController.publishEvent
+  eventController.createEvent
 );
 
 
@@ -47,6 +47,6 @@ router.get(
   requireAuth,
   eventController.getEvent
 );
-
+ 
 
 export default router;

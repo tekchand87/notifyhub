@@ -2,21 +2,35 @@ import * as eventService
   from "./event.service.js";
 
 
-export const publishEvent = async (req,res,next) => {
-  try {
-    const result =await eventService.publishEvent(req.tenantId,req.body);
+// export const publishEvent = async (req,res,next) => {
+//   try {
+//     const result =await eventService.publishEvent(req.tenantId,req.body);
+
+//     return res.status(202).json({
+//         success: true,
+//         message: "Event accepted",
+//         data: result
+//       });
+//   } 
+//   catch (error) {
+//     next(error);
+//   }
+// };
+
+export const createEvent = async(req,res,next)=>{
+  try{
+    const result = await eventService.publishEvent(req.tenantId,req.body);
 
     return res.status(202).json({
-        success: true,
-        message: "Event accepted",
-        data: result
-      });
-  } 
-  catch (error) {
+      success : true,
+      message : "Event accepted",
+      data : result
+    });
+  }
+  catch(error){
     next(error);
   }
-};
-
+}
 
 export const listEvents = async (req,res,next) => {
   try {
