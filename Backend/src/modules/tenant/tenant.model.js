@@ -46,7 +46,7 @@ const tenantSchema = new mongoose.Schema(
 );
 
 tenantSchema.index({slug : 1},{unique : true});
-tenantSchema.index({status : 1},{createdAt : -1});
+tenantSchema.index({status : 1, createdAt : -1});
 
 export const Tenant = mongoose.model("Tenant",tenantSchema);
 

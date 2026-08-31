@@ -16,7 +16,7 @@ const toSafeUser = (user)=>({
   tenantId : user.tenantId,
   role : user.role,
   isActive : user.isActive,
-  createAt : user.createAt
+  createAt : user.createdAt
 });
 
 export const register  = async ({name,email,password,tenantName})=>{

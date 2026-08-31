@@ -1,7 +1,7 @@
 import {publishKafkaEvent} from "./kafka.producer.js"
 
 export const publishEventToKafka = async(event)=>{
-   const result = await publishEventToKafka(event);
+   const result = await publishKafkaEvent(event);
 
    return {
       topic : result[0]?.topicName,

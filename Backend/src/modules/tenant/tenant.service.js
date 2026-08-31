@@ -100,7 +100,7 @@ export const listTenantMembers = async(tenantId,{page=1,limit=20,search=""}={})=
 
   const [members,total] = await Promise.all([
     User.find(filter)
-      .select("name email role isActive createAt updatedAt")
+      .select("name email role isActive createdAt updatedAt")
       .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(normalizedLimit)

@@ -19,7 +19,7 @@ export const login = async(req,res,next)=>{
 
     return res.status(200).json({
       success : true,
-      message : " Login successfull",
+      message : "Login successful",
       data : result 
     });
   }catch(error){
@@ -47,7 +47,7 @@ export const changePassword = async(req,res,next)=>{
 
     return res.status(200).json({
       success : true,
-      result
+      message : result.message
     });
   }catch(error){
     next(error);

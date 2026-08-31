@@ -7,7 +7,7 @@ const startServer = async()=>{
   await connectMongoDB();
 
   app.listen(env.PORT,() => {
-    console.log(`NotiyHub API running on port ${env.PORT}`);
+    console.log(`NotifyHub API running on port ${env.PORT}`);
   });
 };
 

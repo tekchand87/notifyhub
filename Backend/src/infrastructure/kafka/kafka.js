@@ -8,7 +8,7 @@ const brokers = (process.env.KAFKA_BROKERS || "localhost:9092")
 .filter(Boolean)
 
 export const kafka = new Kafka({
-   clientId : process.env.KAFKA_CLIENT_ID||"notifyhub-api",
+   clientId : process.env.KAFKA_PRODUCER_CLIENT_ID||"notifyhub-api",
    brokers,
    logLevel : logLevel.INFO
 });
