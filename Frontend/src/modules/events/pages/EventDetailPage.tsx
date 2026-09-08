@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Copy, Check } from 'lucide-react';
+import { ArrowLeft, Copy, Check, Hash, Clock, Radio } from 'lucide-react';
 import { useState } from 'react';
 import { useEvent } from '@/modules/events/hooks/useEvents';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { formatDate } from '@/lib/utils';
 import { ROUTES } from '@/constants';
+import { cn } from '@/lib/utils';
 
 export function EventDetailPage() {
   const { eventId } = useParams<{ eventId: string }>();
@@ -25,10 +26,10 @@ export function EventDetailPage() {
     return (
       <div>
         <PageHeader title="Event" />
-        <div className="p-6 space-y-3">
+        <div className="p-6 space-y-3 max-w-5xl">
           <Skeleton className="h-5 w-64" />
           <Skeleton className="h-4 w-40" />
-          <Skeleton className="h-32 w-full max-w-lg" />
+          <Skeleton className="h-32 w-full" />
         </div>
       </div>
     );
@@ -57,41 +58,70 @@ export function EventDetailPage() {
       />
 
       <div className="p-6 grid lg:grid-cols-2 gap-4 max-w-5xl">
-        {/* Meta card */}
-        <div className="card divide-y divide-surface-100 dark:divide-surface-800">
-          <div className="px-4 py-3">
-            <h2 className="font-medium text-sm text-surface-700 dark:text-surface-300">Event Information</h2>
+        {/* ── Event Information ──────────────────────── */}
+        <div className="card overflow-hidden">
+          <div className={cn(
+            'flex items-center gap-2 px-4 py-3 border-b',
+            'border-surface-100 dark:border-[#2a2d32]',
+          )}>
+            <Hash className="w-3.5 h-3.5 text-surface-400" />
+            <h2 className="text-xs font-semibold text-surface-800 dark:text-surface-200 uppercase tracking-wide">
+              Event Information
+            </h2>
           </div>
 
-          <InfoRow
-            label="Event ID"
-            value={
-              <div className="flex items-center gap-1.5">
-                <code className="text-xs font-mono truncate max-w-[180px]">{event._id}</code>
+          <div className="divide-y divide-surface-50 dark:divide-[#2a2d32]">
+            {/* Event ID row with copy */}
+            <div className="flex items-center gap-4 px-4 py-2.5 text-xs">
+              <span className="w-24 shrink-0 text-surface-500 dark:text-surface-400">Event ID</span>
+              <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                <code className="font-mono text-2xs text-surface-600 dark:text-surface-400 truncate">
+                  {event._id}
+                </code>
                 <button
                   onClick={copyId}
-                  className="text-surface-400 hover:text-surface-700 transition-colors"
+                  className="shrink-0 text-surface-400 hover:text-primary-700 dark:hover:text-primary-400 transition-colors"
                   aria-label="Copy ID"
                 >
-                  {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied
+                    ? <Check className="w-3.5 h-3.5 text-success-600" />
+                    : <Copy className="w-3.5 h-3.5" />}
                 </button>
               </div>
-            }
-          />
-          <InfoRow label="Type" value={<code className="text-xs font-mono">{event.type}</code>} />
-          <InfoRow label="Channel" value={<StatusBadge value={event.channel} />} />
-          <InfoRow label="Status" value={<StatusBadge value={event.status} />} />
-          <InfoRow label="Created" value={formatDate(event.createdAt)} />
-          <InfoRow label="Updated" value={formatDate(event.updatedAt)} />
+            </div>
+
+            <InfoRow label="Type" value={
+              <code className="font-mono text-xs text-surface-700 dark:text-surface-300">{event.type}</code>
+            } />
+            <InfoRow label="Channel" value={<StatusBadge value={event.channel} />} />
+            <InfoRow label="Status" value={<StatusBadge value={event.status} />} />
+            <InfoRow label="Created" value={
+              <span className="font-mono text-2xs text-surface-500">{formatDate(event.createdAt)}</span>
+            } />
+            <InfoRow label="Updated" value={
+              <span className="font-mono text-2xs text-surface-500">{formatDate(event.updatedAt)}</span>
+            } />
+          </div>
         </div>
 
-        {/* Payload card */}
-        <div className="card">
-          <div className="px-4 py-3 border-b border-surface-100 dark:border-surface-800">
-            <h2 className="font-medium text-sm text-surface-700 dark:text-surface-300">Payload</h2>
+        {/* ── Payload ────────────────────────────────── */}
+        <div className="card overflow-hidden">
+          <div className={cn(
+            'flex items-center gap-2 px-4 py-3 border-b',
+            'border-surface-100 dark:border-[#2a2d32]',
+          )}>
+            <Radio className="w-3.5 h-3.5 text-surface-400" />
+            <h2 className="text-xs font-semibold text-surface-800 dark:text-surface-200 uppercase tracking-wide">
+              Payload
+            </h2>
           </div>
           <div className="p-4">
-            <pre className="text-xs font-mono text-surface-700 dark:text-surface-300 bg-surface-50 dark:bg-surface-950 p-3 rounded border border-surface-200 dark:border-surface-800 overflow-auto max-h-80">
+            <pre className={cn(
+              'text-2xs font-mono p-3 rounded border overflow-auto max-h-80 leading-relaxed',
+              'text-surface-700 dark:text-surface-300',
+              'bg-surface-50 dark:bg-[#111214]',
+              'border-surface-200 dark:border-[#2a2d32]',
+            )}>
               {JSON.stringify(event.payload, null, 2)}
             </pre>
           </div>
@@ -103,7 +133,7 @@ export function EventDetailPage() {
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-4 px-4 py-3 text-sm">
+    <div className="flex items-center gap-4 px-4 py-2.5 text-xs">
       <span className="w-24 shrink-0 text-surface-500 dark:text-surface-400">{label}</span>
       <span className="flex-1 text-surface-900 dark:text-surface-100">{value}</span>
     </div>

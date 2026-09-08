@@ -8,7 +8,7 @@ export function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
-    <div className="min-h-screen flex flex-col bg-surface-50 dark:bg-surface-950">
+    <div className="min-h-screen flex flex-col bg-surface-50 dark:bg-[#111214]">
       <TopNavbar onMenuToggle={() => setMobileOpen((o) => !o)} />
 
       <div className="flex flex-1 pt-[48px]">
@@ -20,7 +20,7 @@ export function AppLayout() {
           />
         </div>
 
-        {/* Mobile sidebar */}
+        {/* Mobile sidebar — drawer only, no desktop duplicate */}
         <Sidebar
           collapsed={false}
           onToggle={() => {}}
@@ -28,7 +28,7 @@ export function AppLayout() {
           onMobileClose={() => setMobileOpen(false)}
         />
 
-        {/* Main content */}
+        {/* Main content area */}
         <main className="flex-1 min-w-0 overflow-auto">
           <Outlet />
         </main>

@@ -5,6 +5,7 @@ interface Column<T> {
   key: string;
   header: string;
   width?: string;
+  align?: 'left' | 'right' | 'center';
   render: (row: T) => ReactNode;
 }
 
@@ -27,11 +28,21 @@ export function DataTable<T>({
     <div className={cn('overflow-x-auto', className)}>
       <table className="w-full border-collapse text-sm">
         <thead>
-          <tr className="border-b border-surface-200 dark:border-surface-800">
+          <tr
+            className={cn(
+              'border-b',
+              'border-surface-200 bg-surface-50',
+              'dark:border-[#2a2d32] dark:bg-[#111214]',
+            )}
+          >
             {columns.map((col) => (
               <th
                 key={col.key}
-                className="table-header px-4 py-2.5 text-left whitespace-nowrap"
+                className={cn(
+                  'table-header px-4 py-2 text-left whitespace-nowrap',
+                  col.align === 'right' && 'text-right',
+                  col.align === 'center' && 'text-center',
+                )}
                 style={col.width ? { width: col.width } : undefined}
               >
                 {col.header}
@@ -39,20 +50,29 @@ export function DataTable<T>({
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-surface-100 dark:divide-surface-800">
-          {data.map((row) => (
+
+        <tbody>
+          {data.map((row, i) => (
             <tr
               key={rowKey(row)}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               className={cn(
-                'transition-colors',
-                onRowClick && 'cursor-pointer hover:bg-surface-50 dark:hover:bg-surface-800/60',
+                'border-b transition-colors',
+                'border-surface-100 dark:border-[#2a2d32]',
+                // Subtle alternating rows — very faint
+                i % 2 === 1 && 'bg-surface-50/50 dark:bg-[#111214]/40',
+                onRowClick &&
+                  'cursor-pointer hover:bg-primary-50/60 dark:hover:bg-primary-950/20',
               )}
             >
               {columns.map((col) => (
                 <td
                   key={col.key}
-                  className="px-4 py-2.5 text-surface-700 dark:text-surface-300 whitespace-nowrap"
+                  className={cn(
+                    'px-4 py-2.5 text-surface-700 dark:text-surface-300 whitespace-nowrap',
+                    col.align === 'right' && 'text-right',
+                    col.align === 'center' && 'text-center',
+                  )}
                 >
                   {col.render(row)}
                 </td>

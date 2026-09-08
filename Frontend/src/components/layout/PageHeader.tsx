@@ -12,17 +12,29 @@ export function PageHeader({ title, description, actions, className }: PageHeade
   return (
     <div
       className={cn(
-        'flex items-start justify-between gap-4 px-6 py-4 border-b border-surface-200 dark:border-surface-800 bg-white dark:bg-surface-900',
+        'flex items-center justify-between gap-4 px-6 py-3.5',
+        'border-b bg-white',
+        'border-surface-200 dark:border-[#2a2d32] dark:bg-[#181a1d]',
         className,
       )}
     >
-      <div>
-        <h1 className="text-base font-semibold text-surface-900 dark:text-surface-100">{title}</h1>
-        {description && (
-          <p className="mt-0.5 text-sm text-surface-500 dark:text-surface-400">{description}</p>
-        )}
+      <div className="flex items-center gap-3 min-w-0">
+        {/* Amber accent bar */}
+        <div className="w-0.5 h-5 bg-primary-600 rounded-full shrink-0" aria-hidden />
+        <div className="min-w-0">
+          <h1 className="text-sm font-semibold text-surface-900 dark:text-surface-100 truncate">
+            {title}
+          </h1>
+          {description && (
+            <p className="text-xs text-surface-500 dark:text-surface-400 mt-0.5 truncate">
+              {description}
+            </p>
+          )}
+        </div>
       </div>
-      {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
+      {actions && (
+        <div className="flex items-center gap-2 shrink-0">{actions}</div>
+      )}
     </div>
   );
 }

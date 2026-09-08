@@ -1,7 +1,14 @@
-import {kafka} from "./kafka.js"
-import "dotenv/config"
+import { kafka } from "./kafka.js";
+import { Partitioners } from "kafkajs";
+import "dotenv/config";
 
-const producer = kafka.producer();
+// Explicitly use the KafkaJS v2 default partitioner (murmur2).
+// The producer uses tenantId as the message key, so DefaultPartitioner
+// will consistently route all events for the same tenant to the same
+// partition — which is the correct behavior for tenant-level ordering.
+const producer = kafka.producer({
+   createPartitioner: Partitioners.DefaultPartitioner,
+});
 let connected = false;
 
 export const connectKafkaProducer = async()=>{

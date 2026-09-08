@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, User, Shield } from 'lucide-react';
 import { useMember, useUpdateMember } from '@/modules/tenant/hooks/useMembers';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { StatusBadge, ActiveBadge } from '@/components/ui/StatusBadge';
@@ -9,8 +9,7 @@ import { ErrorState } from '@/components/ui/ErrorState';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/Toast';
 import { useAuth } from '@/modules/auth/AuthContext';
-import { formatDate } from '@/lib/utils';
-import { extractErrorMessage } from '@/lib/utils';
+import { formatDate, extractErrorMessage, cn } from '@/lib/utils';
 import { ROUTES } from '@/constants';
 import type { UserRole } from '@/types';
 
@@ -57,7 +56,7 @@ export function MemberDetailPage() {
     return (
       <div>
         <PageHeader title="Member" />
-        <div className="p-6 space-y-3">
+        <div className="p-6 space-y-3 max-w-4xl">
           <Skeleton className="h-5 w-40" />
           <Skeleton className="h-4 w-64" />
           <Skeleton className="h-4 w-32" />
@@ -91,10 +90,7 @@ export function MemberDetailPage() {
         title="Member Detail"
         description={member.email}
         actions={
-          <button
-            onClick={() => navigate(ROUTES.MEMBERS)}
-            className="btn-secondary"
-          >
+          <button onClick={() => navigate(ROUTES.MEMBERS)} className="btn-secondary">
             <ArrowLeft className="w-3.5 h-3.5" />
             Back to Members
           </button>
@@ -102,66 +98,99 @@ export function MemberDetailPage() {
       />
 
       <div className="p-6 grid lg:grid-cols-3 gap-4 max-w-4xl">
-        {/* Detail card */}
-        <div className="lg:col-span-2 card divide-y divide-surface-100 dark:divide-surface-800">
-          <div className="px-4 py-3">
-            <h2 className="font-medium text-sm text-surface-700 dark:text-surface-300">Member Information</h2>
+        {/* ── Member info card ──────────────────────── */}
+        <div className="lg:col-span-2 card overflow-hidden">
+          <div className={cn(
+            'flex items-center gap-2 px-4 py-3 border-b',
+            'border-surface-100 dark:border-[#2a2d32]',
+          )}>
+            <User className="w-3.5 h-3.5 text-surface-400" />
+            <h2 className="text-xs font-semibold text-surface-800 dark:text-surface-200 uppercase tracking-wide">
+              Member Information
+            </h2>
           </div>
-          <InfoRow label="Name" value={member.name} />
-          <InfoRow label="Email" value={member.email} />
-          <InfoRow label="Role" value={<StatusBadge value={member.role} />} />
-          <InfoRow label="Status" value={<ActiveBadge isActive={member.isActive} />} />
-          <InfoRow label="Created" value={formatDate(member.createdAt)} />
-          <InfoRow label="Updated" value={formatDate(member.updatedAt)} />
+          <div className="divide-y divide-surface-50 dark:divide-[#2a2d32]">
+            <InfoRow label="Name" value={
+              <span className="font-medium text-surface-900 dark:text-surface-100">{member.name}</span>
+            } />
+            <InfoRow label="Email" value={
+              <code className="font-mono text-2xs text-surface-600 dark:text-surface-400">{member.email}</code>
+            } />
+            <InfoRow label="Role" value={<StatusBadge value={member.role} />} />
+            <InfoRow label="Status" value={<ActiveBadge isActive={member.isActive} />} />
+            <InfoRow label="Created" value={
+              <span className="font-mono text-2xs text-surface-500">{formatDate(member.createdAt)}</span>
+            } />
+            <InfoRow label="Updated" value={
+              <span className="font-mono text-2xs text-surface-500">{formatDate(member.updatedAt)}</span>
+            } />
+          </div>
         </div>
 
-        {/* Actions card */}
-        <div className="card p-4 h-fit space-y-3">
-          <h2 className="font-medium text-sm text-surface-700 dark:text-surface-300 border-b border-surface-100 dark:border-surface-800 pb-2">
-            Actions
-          </h2>
-
-          {/* Role change */}
-          <div>
-            <label htmlFor="role-select" className="label">Change Role</label>
-            <select
-              id="role-select"
-              value={member.role}
-              onChange={(e) => handleRoleChange(e.target.value as UserRole)}
-              disabled={isPending}
-              className="input"
-            >
-              <option value="member">Member</option>
-              <option value="tenant_admin">Admin</option>
-            </select>
+        {/* ── Actions card ──────────────────────────── */}
+        <div className="card overflow-hidden h-fit">
+          <div className={cn(
+            'flex items-center gap-2 px-4 py-3 border-b',
+            'border-surface-100 dark:border-[#2a2d32]',
+          )}>
+            <Shield className="w-3.5 h-3.5 text-surface-400" />
+            <h2 className="text-xs font-semibold text-surface-800 dark:text-surface-200 uppercase tracking-wide">
+              Actions
+            </h2>
           </div>
 
-          {/* Activate / Deactivate */}
-          {member.isActive ? (
-            <button
-              onClick={() => setConfirmAction({ type: 'deactivate' })}
-              disabled={isPending || isSelf}
-              className="btn-danger w-full justify-center"
-              title={isSelf ? 'You cannot deactivate your own account' : undefined}
-            >
-              Deactivate
-            </button>
-          ) : (
-            <button
-              onClick={() => setConfirmAction({ type: 'activate' })}
-              disabled={isPending}
-              className="btn-primary w-full justify-center"
-            >
-              Activate
-            </button>
-          )}
+          <div className="p-4 space-y-4">
+            {/* Role change */}
+            <div className="field">
+              <label htmlFor="role-select" className="label">Change Role</label>
+              <select
+                id="role-select"
+                value={member.role}
+                onChange={(e) => handleRoleChange(e.target.value as UserRole)}
+                disabled={isPending || isSelf}
+                className="input"
+              >
+                <option value="member">Member</option>
+                <option value="tenant_admin">Admin</option>
+              </select>
+              {isSelf && (
+                <p className="text-2xs text-surface-400 mt-1">You cannot change your own role</p>
+              )}
+            </div>
 
-          {isSelf && (
-            <p className="text-xs text-surface-400 flex items-center gap-1">
-              <AlertTriangle className="w-3 h-3" />
-              You cannot deactivate yourself
-            </p>
-          )}
+            {/* Separator */}
+            <div className="border-t border-surface-100 dark:border-[#2a2d32]" />
+
+            {/* Activate / Deactivate */}
+            {member.isActive ? (
+              <button
+                onClick={() => setConfirmAction({ type: 'deactivate' })}
+                disabled={isPending || isSelf}
+                className="btn-danger w-full justify-center"
+                title={isSelf ? 'You cannot deactivate your own account' : undefined}
+              >
+                Deactivate member
+              </button>
+            ) : (
+              <button
+                onClick={() => setConfirmAction({ type: 'activate' })}
+                disabled={isPending}
+                className="btn-primary w-full justify-center"
+              >
+                Activate member
+              </button>
+            )}
+
+            {isSelf && (
+              <p className={cn(
+                'text-2xs flex items-center gap-1.5',
+                'text-surface-400 dark:text-surface-500',
+              )}>
+                <AlertTriangle className="w-3 h-3 shrink-0" />
+                You cannot deactivate yourself
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -176,9 +205,7 @@ export function MemberDetailPage() {
         }
         description={confirmDescription}
         variant={confirmAction?.type === 'deactivate' ? 'danger' : 'default'}
-        confirmLabel={
-          confirmAction?.type === 'deactivate' ? 'Deactivate' : 'Confirm'
-        }
+        confirmLabel={confirmAction?.type === 'deactivate' ? 'Deactivate' : 'Confirm'}
         onConfirm={handleConfirm}
         onCancel={() => setConfirmAction(null)}
       />
@@ -188,8 +215,8 @@ export function MemberDetailPage() {
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-4 px-4 py-3 text-sm">
-      <span className="w-28 shrink-0 text-surface-500 dark:text-surface-400">{label}</span>
+    <div className="flex items-center gap-4 px-4 py-2.5 text-xs">
+      <span className="w-24 shrink-0 text-surface-500 dark:text-surface-400">{label}</span>
       <span className="flex-1 text-surface-900 dark:text-surface-100">{value}</span>
     </div>
   );
