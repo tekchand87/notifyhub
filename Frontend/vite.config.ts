@@ -10,6 +10,10 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Only /api/* and /health* are proxied to Express (port 3000).
+    // All other routes (e.g. /api-keys, /dashboard) are served by Vite,
+    // which returns index.html so React Router handles them client-side.
+    // IMPORTANT: access the app at http://localhost:5173, NOT :3000
     proxy: {
       '/api': {
         target: 'http://localhost:3000',
@@ -22,3 +26,4 @@ export default defineConfig({
     },
   },
 });
+

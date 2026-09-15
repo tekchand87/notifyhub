@@ -1,7 +1,13 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import { tokenStorage } from './auth';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
+// ── Base URL ───────────────────────────────────────────────────────────────────
+// Development: leave VITE_API_BASE_URL empty → Axios uses relative paths
+//   (/api/v1/...) which the Vite dev server proxy forwards to Express :3000.
+//   This avoids CORS issues and ensures all requests go through the same origin.
+//
+// Production: set VITE_API_BASE_URL=https://api.yourdomain.com in .env
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 export const apiClient = axios.create({
   baseURL: BASE_URL,
@@ -24,9 +30,13 @@ apiClient.interceptors.response.use(
   (error: AxiosError<{ message?: string; error?: string }>) => {
     if (error.response?.status === 401) {
       tokenStorage.clear();
-      // Redirect to login if not already there
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.href = '/login';
+      // Only hard-redirect to login if not already on an auth page.
+      // Use replace() so the browser Back button doesn't loop back.
+      const isAuthPage =
+        window.location.pathname === '/login' ||
+        window.location.pathname === '/register';
+      if (!isAuthPage) {
+        window.location.replace('/login');
       }
     }
 

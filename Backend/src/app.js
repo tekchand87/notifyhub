@@ -1,6 +1,11 @@
 import express from "express"
 import cors from "cors"
 import helmet from "helmet"
+import path from "path"
+import { fileURLToPath } from "url"
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
 
 import authRoutes from "./modules/auth/auth.routes.js"
 import tenantRoutes from "./modules/tenant/tenant.routes.js"
@@ -120,7 +125,34 @@ app.use("/api/v1/tenant",tenantRoutes);
 app.use("/api/v1/api-keys",apiRoutes);
 app.use("/api/v1/events",eventRoutes);
 
-app.use(notFound);
+// ─── Serve built frontend (production / when dist exists) ─────────────────────
+// In development, the Vite dev server (port 5173) serves the frontend and
+// proxies /api and /health to Express. On a hard refresh at e.g. /api-keys,
+// Vite returns index.html and React Router handles the route — no 404.
+//
+// In production (or if someone hits :3000 directly during development):
+// Express serves the built React app from Frontend/dist and falls back to
+// index.html for all non-API routes so React Router still handles navigation.
+const distPath = path.resolve(
+  __dirname,
+  "..",   // src/  → Backend/
+  "..",   // Backend/ → project root
+  "Frontend",
+  "dist"
+);
+
+app.use(express.static(distPath));
+
+// API 404 — only for unknown /api/* routes, not for SPA routes
+app.use("/api", notFound);
+
+// SPA catch-all — return index.html for every other route so that
+// /api-keys, /dashboard, /events/123 etc. work on hard refresh.
+// Uses app.use() (not app.get("*")) for Express 5 / path-to-regexp compatibility.
+app.use((_req, res) => {
+  res.sendFile(path.join(distPath, "index.html"));
+});
+
 app.use(errorHandler);
 
 export default app;
