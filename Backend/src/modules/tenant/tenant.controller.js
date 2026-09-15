@@ -36,6 +36,29 @@ const updateMyTenant = async (req, res, next) => {
   }
 };
 
+/**
+ * PATCH /api/v1/tenant/webhook
+ * Admin only. Updates webhook URL and/or secret.
+ * The secret is NEVER returned in the response.
+ */
+const updateWebhookConfig = async (req, res, next) => {
+  try {
+    const safeTenant = await tenantService.updateWebhookConfig(
+      req.user.tenantId,
+      req.body
+    );
+    res.status(200).json({
+      success: true,
+      message: "Webhook configuration updated",
+      data: {
+        tenant: safeTenant
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const listMembers = async (req, res, next) => {
   try {
     const result = await tenantService.listTenantMembers(
@@ -94,10 +117,30 @@ const updateMember = async (req, res, next) => {
   }
 };
 
+const addMember = async (req, res, next) => {
+  try {
+    const user = await tenantService.addTenantMember(
+      req.user.tenantId,
+      req.body
+    );
+    res.status(201).json({
+      success: true,
+      message: "Member added successfully",
+      data: {
+        member: tenantService.toSafeMember(user)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const tenantController = {
 getMyTenant,
 updateMyTenant,
+updateWebhookConfig,
 listMembers,
 getMember,
-updateMember
+updateMember,
+addMember
 };

@@ -56,13 +56,13 @@ export const login = async({email,password})=>{
   const user = await User.findOne({email}).select("+passwordHash");
 
   if(!user){
-    throw new AppError("Invalid Email or password ",409);
+    throw new AppError("Invalid email or password",401);
   }
 
   const passwordMatch = await bcrypt.compare(password,user.passwordHash);
 
   if(!passwordMatch){
-    throw new AppError("Invalid Email or Password",401);
+    throw new AppError("Invalid email or password",401);
   }
 
   if(!user.isActive){

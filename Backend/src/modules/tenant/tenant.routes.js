@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { tenantController } from "./tenant.controller.js";
-import {updateTenantSchema,updateMemberSchema} from "./tenant.validator.js";
+import {updateTenantSchema, updateMemberSchema, addMemberSchema, updateWebhookConfigSchema} from "./tenant.validator.js";
 import { validate } from "../../middleware/validate.middleware.js";
 import { requireAuth } from "../../middleware/auth.middleware.js";
 import { requireRole } from "../../middleware/role.middleware.js";
@@ -18,7 +18,14 @@ router.get("/",tenantController.getMyTenant);
 router.patch("/",requireRole(USER_ROLES.TENANT_ADMIN),validate(updateTenantSchema),
 tenantController.updateMyTenant);
 
+// Webhook configuration — admin only; secret never returned
+router.patch("/webhook",requireRole(USER_ROLES.TENANT_ADMIN),validate(updateWebhookConfigSchema),
+tenantController.updateWebhookConfig);
+
 router.get("/members",requireRole(USER_ROLES.TENANT_ADMIN),tenantController.listMembers);
+
+router.post("/members",requireRole(USER_ROLES.TENANT_ADMIN),validate(addMemberSchema),
+tenantController.addMember);
 
 router.get("/members/:userId",requireRole(USER_ROLES.TENANT_ADMIN),tenantController.getMember);
 

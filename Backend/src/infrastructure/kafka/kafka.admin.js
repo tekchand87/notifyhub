@@ -33,3 +33,32 @@ export const ensureKafkaTopic = async()=>{
       await admin.disconnect();
    }
 }
+
+/**
+ * Ensures the DLQ topic exists, creating it if necessary.
+ * Called during worker startup alongside ensureKafkaTopic.
+ */
+export const ensureDLQTopic = async () => {
+   const dlqTopic = process.env.KAFKA_DLQ_TOPIC || "notifyhub.events.dlq";
+   const dlqAdmin = kafka.admin();
+   await dlqAdmin.connect();
+
+   try {
+      const topics = await dlqAdmin.listTopics();
+
+      if (!topics.includes(dlqTopic)) {
+         await dlqAdmin.createTopics({
+            topics: [{
+               topic: dlqTopic,
+               numPartitions: 1,
+               replicationFactor: 1,
+            }],
+         });
+         console.log(`Kafka DLQ topic "${dlqTopic}" created`);
+      } else {
+         console.log(`Kafka DLQ topic "${dlqTopic}" already exists`);
+      }
+   } finally {
+      await dlqAdmin.disconnect();
+   }
+};

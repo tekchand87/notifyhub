@@ -6,6 +6,7 @@ export const EVENT_CHANNELS = {
 export const EVENT_STATUS = {
   QUEUED : "queued",
   PROCESSING : "processing",
+  RETRY_WAIT : "retry_wait",
   DELIVERED : "delivered",
   FAILED : "failed",
   DLQ : "dlq"

@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   Bell,
   Users,
@@ -8,6 +9,7 @@ import {
   Clock,
   Activity,
   ExternalLink,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { useTenant } from '@/modules/tenant/hooks/useTenant';
@@ -19,12 +21,36 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { formatDateShort } from '@/lib/utils';
 import { ROUTES } from '@/constants';
 import { cn } from '@/lib/utils';
+import { healthApi, type KafkaStatus } from '@/api/health.api';
+
+// ── Kafka health hook — polls every 30s ───────────────────────────────────────
+function useKafkaHealth() {
+  return useQuery({
+    queryKey: ['kafka-health'],
+    queryFn: () => healthApi.getKafkaHealth(),
+    refetchInterval: 30_000,
+    retry: 1,
+    staleTime: 25_000,
+  });
+}
+
+// Map Kafka status to the StatusRow "status" prop
+function kafkaStatusToRowStatus(
+  status: KafkaStatus | undefined,
+  isLoading: boolean,
+): 'operational' | 'degraded' | 'unknown' {
+  if (isLoading) return 'unknown';
+  if (status === 'healthy') return 'operational';
+  if (status === 'unhealthy') return 'degraded';
+  return 'unknown';
+}
 
 export function DashboardPage() {
   const { user } = useAuth();
   const { data: tenant, isLoading: tenantLoading } = useTenant();
   const { data: eventsData, isLoading: eventsLoading } = useEvents({ limit: 10 });
   const { data: membersData, isLoading: membersLoading } = useMembers({ limit: 1 });
+  const { data: kafkaHealth, isLoading: kafkaLoading, refetch: refetchKafka } = useKafkaHealth();
   const navigate = useNavigate();
 
   const isAdmin = user?.role === 'tenant_admin';
@@ -36,9 +62,11 @@ export function DashboardPage() {
     (e) => e.status === 'failed' || e.status === 'dlq',
   ).length;
   const queuedCount = events.filter(
-    (e) => e.status === 'queued' || e.status === 'processing',
+    (e) => e.status === 'queued' || e.status === 'processing' || e.status === 'retry_wait',
   ).length;
   const totalMembers = membersData?.pagination.total ?? 0;
+
+  const kafkaRowStatus = kafkaStatusToRowStatus(kafkaHealth?.kafka.status, kafkaLoading);
 
   return (
     <div>
@@ -73,7 +101,7 @@ export function DashboardPage() {
             sub="last 10 events"
           />
           <MetricWidget
-            label="Queued"
+            label="Queued / Retrying"
             value={eventsLoading ? null : queuedCount}
             icon={<Clock className="w-3.5 h-3.5" />}
             accent="neutral"
@@ -219,14 +247,23 @@ export function DashboardPage() {
             <div className="card overflow-hidden">
               <div
                 className={cn(
-                  'flex items-center gap-2 px-4 py-3 border-b',
+                  'flex items-center justify-between px-4 py-3 border-b',
                   'border-surface-100 dark:border-[#2a2d32]',
                 )}
               >
-                <Activity className="w-3.5 h-3.5 text-surface-400" />
-                <h2 className="text-xs font-semibold text-surface-800 dark:text-surface-200 uppercase tracking-wide">
-                  System Status
-                </h2>
+                <div className="flex items-center gap-2">
+                  <Activity className="w-3.5 h-3.5 text-surface-400" />
+                  <h2 className="text-xs font-semibold text-surface-800 dark:text-surface-200 uppercase tracking-wide">
+                    System Status
+                  </h2>
+                </div>
+                <button
+                  onClick={() => refetchKafka()}
+                  title="Refresh Kafka status"
+                  className="p-1 rounded hover:bg-surface-100 dark:hover:bg-[#2a2d32] text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 transition-colors"
+                >
+                  <RefreshCw className={cn('w-3 h-3', kafkaLoading && 'animate-spin')} />
+                </button>
               </div>
               <div className="divide-y divide-surface-50 dark:divide-[#2a2d32]">
                 <StatusRow label="API" status="operational" />
@@ -234,7 +271,15 @@ export function DashboardPage() {
                   label="Authentication"
                   status={user ? 'operational' : 'degraded'}
                 />
-                <StatusRow label="Kafka / Events" status="unknown" />
+                <StatusRow
+                  label="Kafka / Events"
+                  status={kafkaRowStatus}
+                  detail={
+                    kafkaHealth?.kafka.latencyMs !== undefined
+                      ? `${kafkaHealth.kafka.latencyMs}ms`
+                      : undefined
+                  }
+                />
               </div>
             </div>
           </div>
@@ -340,30 +385,35 @@ function InfoRow({
 function StatusRow({
   label,
   status,
+  detail,
 }: {
   label: string;
   status: 'operational' | 'degraded' | 'unknown';
+  detail?: string;
 }) {
   const dotClass =
     status === 'operational'
       ? 'bg-success-500'
       : status === 'degraded'
-      ? 'bg-warning-500'
+      ? 'bg-error-500'
       : 'bg-surface-300 dark:bg-surface-600';
 
   const textLabel =
     status === 'operational'
       ? 'Operational'
       : status === 'degraded'
-      ? 'Degraded'
-      : 'Unknown';
+      ? 'Unhealthy'
+      : 'Checking…';
 
   return (
     <div className="flex items-center justify-between px-4 py-2.5 text-xs">
       <span className="text-surface-600 dark:text-surface-400">{label}</span>
       <div className="flex items-center gap-1.5">
         <span className={cn('status-dot', dotClass)} />
-        <span className="text-surface-500 dark:text-surface-400">{textLabel}</span>
+        <span className="text-surface-500 dark:text-surface-400">
+          {textLabel}
+          {detail && <span className="ml-1 text-surface-400 text-2xs">({detail})</span>}
+        </span>
       </div>
     </div>
   );

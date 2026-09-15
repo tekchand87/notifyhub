@@ -17,7 +17,7 @@ export const subscribeKafkaConsumer = async()=>{
    }
    await consumer.subscribe({
       topic,
-      fromBeginning: false
+      fromBeginning: true  // Bug #10 fix: resume from committed offset; if no offset exists, start from beginning (not latest)
    });
    console.log(`Worker subscribed to ${topic}`);
 }

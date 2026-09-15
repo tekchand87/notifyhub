@@ -11,6 +11,36 @@ services:
       MONGO_INITDB_DATABASE: notifyhub
     volumes:
       - notifyhub_mongodb_data:/data/db
+      # mongo-keyfile is generated once via: openssl rand -base64 756 > mongo-keyfile && chmod 400 mongo-keyfile
+      # MongoDB 8 requires a keyFile when --auth and --replSet are used together.
+      # The file is gitignored; regenerate it on every fresh checkout.
+      - ./mongo-keyfile:/etc/mongo-keyfile:ro
+    # Run as a single-node replica set.
+    # MongoDB multi-document ACID transactions (required by the Outbox pattern)
+    # are only available in replica set mode. A single-node replica set provides
+    # exactly the same data guarantees as standalone mode for development,
+    # with full transaction support enabled.
+    command: mongod --replSet rs0 --bind_ip_all --keyFile /etc/mongo-keyfile
+
+  # One-shot container that initializes the replica set on first boot.
+  # It waits for the MongoDB node to be ready, then runs rs.initiate().
+  # After successful initialization it exits cleanly.
+  # The "restart: on-failure" policy ensures it retries if MongoDB isn't ready yet.
+  mongo-init:
+    image: mongo:8
+    container_name: notifyhub-mongo-init
+    restart: on-failure
+    depends_on:
+      - mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: notifyhub
+      MONGO_INITDB_ROOT_PASSWORD: notifyhub_password
+    volumes:
+      - ./mongo-keyfile:/etc/mongo-keyfile:ro
+    entrypoint: [
+      "bash", "-c",
+      "echo 'Waiting for MongoDB...' && sleep 8 && mongosh 'mongodb://notifyhub:notifyhub_password@mongodb:27017/admin?authSource=admin' --eval 'try { rs.status(); print(\"already initialized\"); } catch(e) { rs.initiate({ _id: \"rs0\", members: [{ _id: 0, host: \"mongodb:27017\" }] }); print(\"initialized\"); }'"
+    ]
 
   kafka:
     image: apache/kafka:4.0.1

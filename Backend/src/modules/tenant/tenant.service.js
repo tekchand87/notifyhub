@@ -1,4 +1,6 @@
 import mongoose from "mongoose"
+import bcrypt from "bcrypt"
+import crypto from "crypto"
 import {Tenant} from "./tenant.model.js"
 import {User} from "../auth/user.model.js"
 import {USER_ROLES} from "../auth/auth.contants.js"
@@ -12,6 +14,9 @@ const toSafeTenant = (tenant)=>({
   description : tenant.description,
   website : tenant.website,
   status : tenant.status,
+  // Expose webhookUrl (not secret) so dashboard can show configuration status
+  webhookUrl : tenant.webhookUrl ?? null,
+  webhookConfigured : !!(tenant.webhookUrl),
   createdAt : tenant.createdAt,
   updatedAt : tenant.updatedAt
 });
@@ -40,7 +45,6 @@ const getUniqueSlug = async(name,currentTenantId=null) => {
   }
 
   // Slug is immutable in this phase 2 design
-  // This branch is mainly userful for future explicit slug-creation flows.
   throw new AppError("A Tenant with this normalized name already exists",409);
 };
 
@@ -61,7 +65,6 @@ export const updateMyTenant = async(tenantId,updates)=>{
   }
 
   if(updates.name!==undefined && updates.name!==tenant.name){
-    // Validate normalized-name uniquness event though slug itself is immutable.
     await getUniqueSlug(updates.name,tenant._id);
     tenant.name = updates.name;
   }
@@ -76,6 +79,52 @@ export const updateMyTenant = async(tenantId,updates)=>{
 
   await tenant.save();
   return tenant;
+};
+
+/**
+ * Update webhook configuration for a tenant.
+ * - If webhookUrl is null, clears webhook config.
+ * - If webhookSecret is omitted, auto-generates a secure secret on first setup.
+ * - The secret is NEVER returned; only a boolean `webhookConfigured` is exposed.
+ */
+export const updateWebhookConfig = async(tenantId, { webhookUrl, webhookSecret }) => {
+  // Select +webhookSecret explicitly since it has select:false
+  const tenant = await Tenant.findById(tenantId).select("+webhookSecret");
+
+  if(!tenant){
+    throw new AppError("Tenant not found",404);
+  }
+
+  // Clear webhook configuration
+  if(webhookUrl === null){
+    tenant.webhookUrl = null;
+    tenant.webhookSecret = null;
+    await tenant.save();
+    return toSafeTenant(tenant);
+  }
+
+  if(webhookUrl !== undefined){
+    tenant.webhookUrl = webhookUrl;
+  }
+
+  if(webhookSecret !== undefined && webhookSecret !== null){
+    // User-provided secret
+    tenant.webhookSecret = webhookSecret;
+  } else if(!tenant.webhookSecret && webhookUrl) {
+    // Auto-generate a secure 32-byte hex secret on first setup
+    tenant.webhookSecret = crypto.randomBytes(32).toString("hex");
+  }
+
+  await tenant.save();
+  return toSafeTenant(tenant);
+};
+
+/**
+ * Retrieve tenant with webhookSecret for internal worker use only.
+ * MUST NOT be called from API response paths.
+ */
+export const getTenantForWebhook = async(tenantId) => {
+  return Tenant.findById(tenantId).select("+webhookSecret").lean();
 };
 
 export const listTenantMembers = async(tenantId,{page=1,limit=20,search=""}={})=>{
@@ -115,8 +164,8 @@ export const listTenantMembers = async(tenantId,{page=1,limit=20,search=""}={})=
     limit: normalizedLimit,
     total,
     totalPages: Math.ceil(total / normalizedLimit)
-  }
-}}
+  }}
+}
 
 export const getTenantMember = async (tenantId, userId) => {
 if (!mongoose.isValidObjectId(userId)) {
@@ -164,12 +213,32 @@ await member.save();
 return member;
 };
 
+export const addTenantMember = async (tenantId, { name, email, password, role = USER_ROLES.MEMBER }) => {
+  const existing = await User.findOne({ email: email.toLowerCase().trim() });
+  if (existing) {
+    throw new AppError("An account with this email already exists", 409);
+  }
+  const passwordHash = await bcrypt.hash(password, 12);
+  const user = await User.create({
+    name,
+    email,
+    passwordHash,
+    tenantId,
+    role,
+    isActive: true,
+  });
+  return user;
+};
+
 export const tenantService = {
 getMyTenant,
 updateMyTenant,
+updateWebhookConfig,
+getTenantForWebhook,
 listTenantMembers,
 getTenantMember,
 updateTenantMember,
+addTenantMember,
 toSafeTenant,
 toSafeMember
 };

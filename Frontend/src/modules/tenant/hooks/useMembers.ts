@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { membersApi } from '@/api/members.api';
-import type { MemberListParams, UpdateMemberRequest } from '@/types';
+import type { MemberListParams, UpdateMemberRequest, AddMemberRequest } from '@/types';
 
 export const MEMBERS_KEY = ['members'] as const;
 export const memberKey = (id: string) => ['member', id] as const;
@@ -28,6 +28,16 @@ export function useUpdateMember(userId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: MEMBERS_KEY });
       qc.invalidateQueries({ queryKey: memberKey(userId) });
+    },
+  });
+}
+
+export function useAddMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: AddMemberRequest) => membersApi.add(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: MEMBERS_KEY });
     },
   });
 }

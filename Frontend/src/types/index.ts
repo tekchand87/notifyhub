@@ -36,7 +36,7 @@ export interface Member {
 }
 
 export type EventChannel = 'email' | 'webhook';
-export type EventStatus = 'queued' | 'processing' | 'delivered' | 'failed' | 'dlq';
+export type EventStatus = 'queued' | 'processing' | 'retry_wait' | 'delivered' | 'failed' | 'dlq';
 
 export interface Event {
   _id: string;
@@ -45,8 +45,33 @@ export interface Event {
   channel: EventChannel;
   payload: Record<string, unknown>;
   status: EventStatus;
+  // Retry tracking
+  attempts: number;
+  maxAttempts: number | null;
+  lastError?: string | null;
+  nextRetryAt?: string | null;
+  // Worker lease fields (set while status = processing)
+  processingStartedAt?: string | null;
+  leaseExpiresAt?: string | null;
+  workerId?: string | null;
+  // Lifecycle timestamps
+  deliveredAt?: string | null;
+  failedAt?: string | null;
+  dlqAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface Delivery {
+  _id: string;
+  eventId: string;
+  attemptNumber: number;
+  channel: EventChannel;
+  status: 'success' | 'failed';
+  providerResponse?: string | null;
+  messageId?: string | null;
+  errorMessage?: string | null;
+  attemptedAt: string;
 }
 
 export interface ApiKey {
@@ -145,6 +170,13 @@ export interface UpdateTenantRequest {
 export interface UpdateMemberRequest {
   role?: UserRole;
   isActive?: boolean;
+}
+
+export interface AddMemberRequest {
+  name: string;
+  email: string;
+  password: string;
+  role?: UserRole;
 }
 
 export interface CreateApiKeyRequest {

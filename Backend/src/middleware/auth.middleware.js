@@ -51,13 +51,13 @@ export const requireAuth = async (req, res, next) => {
     if (error.name === "TokenExpiredError") {
       return next(
         new AppError(
-          "Authentication token is expired",
+          "Authentication token has expired",
           401
         )
       );
     }
 
-    // Invalid JWT
+    // Invalid JWT signature / malformed / wrong algorithm
     if (error.name === "JsonWebTokenError") {
       return next(
         new AppError(
@@ -67,6 +67,29 @@ export const requireAuth = async (req, res, next) => {
       );
     }
 
-    return next(error);
+    // Mongoose CastError: malformed JWT payload containing an invalid ObjectId
+    // (e.g., JWT was signed with the right secret but userId is garbage)
+    if (error.name === "CastError" || error.name === "BSONError") {
+      return next(
+        new AppError(
+          "Invalid authentication token",
+          401
+        )
+      );
+    }
+
+    // Re-throw operational AppErrors (e.g., "User account no longer exists")
+    if (error.isOperational) {
+      return next(error);
+    }
+
+    // Any other unexpected error during auth — treat as 401, not 500,
+    // so we never leak internal details through an auth endpoint.
+    return next(
+      new AppError(
+        "Authentication failed",
+        401
+      )
+    );
   }
 };

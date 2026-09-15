@@ -1,75 +1,55 @@
-import * as eventService
-  from "./event.service.js";
+// src/modules/event/event.controller.js
+import * as eventService from "./event.service.js";
 
-
-// export const publishEvent = async (req,res,next) => {
-//   try {
-//     const result =await eventService.publishEvent(req.tenantId,req.body);
-
-//     return res.status(202).json({
-//         success: true,
-//         message: "Event accepted",
-//         data: result
-//       });
-//   } 
-//   catch (error) {
-//     next(error);
-//   }
-// };
-
-export const createEvent = async(req,res,next)=>{
-  try{
-    const result = await eventService.publishEvent(req.tenantId,req.body);
+export const createEvent = async (req, res, next) => {
+  try {
+    const result = await eventService.publishEvent(
+      req.tenantId,
+      req.body,
+      {
+        // Pass the idempotency record ID so the service can mark it complete
+        // after a successful transaction. null if no key was provided.
+        idempotencyRecordId: req.idempotencyRecord?._id ?? null,
+      }
+    );
 
     return res.status(202).json({
-      success : true,
-      message : "Event accepted",
-      data : result
+      success: true,
+      message: "Event accepted",
+      data: result,
     });
-  }
-  catch(error){
-    next(error);
-  }
-}
-
-export const listEvents = async (req,res,next) => {
-  try {
-    const result =
-      await eventService.listEvents(req.user.tenantId,req.query);
-
-    return res.status(200).json({
-        success: true,
-        data: result
-      });
-
   } catch (error) {
     next(error);
   }
 };
 
-
-export const getEvent = async (
-  req,
-  res,
-  next
-) => {
+export const listEvents = async (req, res, next) => {
   try {
+    const result = await eventService.listEvents(
+      req.user.tenantId,
+      req.query
+    );
 
-    const result =
-      await eventService.getEvent(
-        req.user.tenantId,
-        req.params.eventId
-      );
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
-    return res
-      .status(200)
-      .json({
-        success: true,
-        data: {
-          event: result
-        }
-      });
+export const getEvent = async (req, res, next) => {
+  try {
+    const result = await eventService.getEvent(
+      req.user.tenantId,
+      req.params.eventId
+    );
 
+    return res.status(200).json({
+      success: true,
+      data: { event: result },
+    });
   } catch (error) {
     next(error);
   }

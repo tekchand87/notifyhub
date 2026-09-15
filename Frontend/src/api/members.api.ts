@@ -4,6 +4,7 @@ import type {
   MemberListParams,
   MemberListResponse,
   UpdateMemberRequest,
+  AddMemberRequest,
   ApiResponse,
 } from '@/types';
 
@@ -25,6 +26,14 @@ export const membersApi = {
   update: async (userId: string, data: UpdateMemberRequest): Promise<Member> => {
     const res = await apiClient.patch<ApiResponse<{ member: Member }>>(
       `/api/v1/tenant/members/${userId}`,
+      data,
+    );
+    return res.data.data!.member;
+  },
+
+  add: async (data: AddMemberRequest): Promise<Member> => {
+    const res = await apiClient.post<ApiResponse<{ member: Member }>>(
+      '/api/v1/tenant/members',
       data,
     );
     return res.data.data!.member;

@@ -6,12 +6,14 @@ import {registerSchema,loginSchema,changePasswordSchema} from "./auth.validator.
 
 import {validate} from "../../middleware/validate.middleware.js"
 import {requireAuth} from "../../middleware/auth.middleware.js"
+import { authLimiter } from "../../middleware/rateLimit.middleware.js"
 
 const router = Router();
 
-router.post("/register",validate(registerSchema),authController.register);
+// Apply strict rate limiting to auth endpoints to prevent brute-force attacks
+router.post("/register", authLimiter, validate(registerSchema), authController.register);
 
-router.post("/login",validate(loginSchema),authController.login);
+router.post("/login", authLimiter, validate(loginSchema), authController.login);
 
 router.get("/me",requireAuth,authController.getMe);
 
