@@ -1,244 +1,201 @@
-// src/infrastructure/outbox/outbox.publisher.js
-// Outbox Publisher — polls OutboxEvent records and publishes them to Kafka.
-//
-// Architecture:
-//   The Outbox Pattern decouples event acceptance from Kafka availability.
-//   When an event is created, an OutboxEvent is written in the same MongoDB
-//   transaction. This publisher polls for pending OutboxEvents and publishes
-//   them to Kafka asynchronously.
-//
-// Concurrency:
-//   Multiple API server instances may run this publisher simultaneously.
-//   The atomic claim (pending → publishing via findOneAndUpdate) ensures
-//   only one publisher processes each OutboxEvent.
-//
-// At-least-once delivery:
-//   If the publisher crashes after Kafka.send() but before marking the record
-//   as "published", the message will be re-published on the next poll.
-//   Downstream workers use eventId as the stable identity for idempotency.
-//
-// Error handling:
-//   - Kafka unavailable: OutboxEvent stays pending, retried with backoff
-//   - Max attempts exceeded: OutboxEvent marked "failed" (terminal)
-//   - Publisher crashes: pending/publishing records recovered on next poll
-//     (publishing records are reclaimed after OUTBOX_STALE_MS timeout)
+// Outbox Publisher — reliably moves committed MongoDB outbox records to Kafka.
+// A MongoDB claim remains the source of ownership. Kafka publication remains
+// at-least-once: a crash after Kafka acknowledges a batch but before MongoDB is
+// updated causes stale-claim recovery to publish that batch again.
 
+import crypto from "crypto";
 import { OutboxEvent } from "../../modules/event/outbox.model.js";
-import { publishKafkaEvent } from "../kafka/kafka.producer.js";
-import {
-  logInfo,
-  logWarn,
-  logError,
-} from "../../modules/worker/worker.logger.js";
+import { publishKafkaEvents } from "../kafka/kafka.producer.js";
+import { logInfo, logWarn, logError } from "../../modules/worker/worker.logger.js";
 
-// ── Configuration (read lazily so tests can override) ──────────────────────────
+const positiveInteger = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 const config = {
-  get pollIntervalMs() {
-    return Number(process.env.OUTBOX_POLL_INTERVAL_MS) || 1_000;
-  },
-  get batchSize() {
-    return Number(process.env.OUTBOX_BATCH_SIZE) || 50;
-  },
-  get maxAttempts() {
-    return Number(process.env.OUTBOX_MAX_ATTEMPTS) || 5;
-  },
-  // Outbox records stuck in "publishing" longer than this are considered stale
-  // and reset to "pending". This handles publisher crashes mid-flight.
-  get staleMs() {
-    return Number(process.env.OUTBOX_STALE_MS) || 60_000;
-  },
+  get pollIntervalMs() { return positiveInteger(process.env.OUTBOX_POLL_INTERVAL_MS, 25); },
+  get batchSize() { return positiveInteger(process.env.OUTBOX_BATCH_SIZE, 500); },
+  get concurrency() { return positiveInteger(process.env.OUTBOX_CONCURRENCY, 50); },
+  get maxAttempts() { return positiveInteger(process.env.OUTBOX_MAX_ATTEMPTS, 5); },
+  get staleMs() { return positiveInteger(process.env.OUTBOX_STALE_MS, 60_000); },
 };
 
 let pollerTimer = null;
 let running = false;
-
-// ── Backoff calculation (reuses existing retry pattern) ─────────────────────────
+let activePoll = null;
 
 const calculateOutboxBackoff = (attempt) => {
-  const base = 1_000;
-  const max = 60_000; // cap at 1 minute for outbox
-  const exponential = base * Math.pow(2, attempt - 1);
-  const capped = Math.min(exponential, max);
+  const capped = Math.min(1_000 * Math.pow(2, attempt - 1), 60_000);
   return Math.floor(Math.random() * capped);
 };
-
-// ── Stale "publishing" record recovery ─────────────────────────────────────────
 
 const recoverStalePublishing = async () => {
   const staleThreshold = new Date(Date.now() - config.staleMs);
   const result = await OutboxEvent.updateMany(
-    {
-      status: "publishing",
-      updatedAt: { $lte: staleThreshold },
-    },
-    {
-      $set: { status: "pending", nextAttemptAt: null },
-    }
+    { status: "publishing", updatedAt: { $lte: staleThreshold } },
+    { $set: { status: "pending", claimToken: null, nextAttemptAt: null } }
   );
   if (result.modifiedCount > 0) {
-    logWarn("Outbox: recovered stale publishing records", {
-      count: result.modifiedCount,
-    });
+    logWarn("Outbox: recovered stale publishing records", { count: result.modifiedCount });
   }
+  return result.modifiedCount;
 };
 
-// ── Single record processing ────────────────────────────────────────────────────
+// Claim a whole candidate set with one status-guarded update. Competing
+// publishers may read the same candidates, but only the first update can change
+// each pending document, so ownership remains atomic per document.
+const claimBatch = async () => {
+  const claimToken = crypto.randomUUID();
+  const now = new Date();
+  const eligible = {
+    status: "pending",
+    $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: now } }],
+  };
+  const candidates = await OutboxEvent.find(eligible)
+    .select("_id")
+    .sort({ nextAttemptAt: 1, _id: 1 })
+    .limit(config.batchSize)
+    .lean();
 
-const processOutboxRecord = async (record) => {
-  const { _id, eventId, tenantId, topic, key, payload, attempts } = record;
-  const eventIdStr = String(eventId);
-  const tenantIdStr = String(tenantId);
+  if (candidates.length === 0) return { records: [], claimToken };
 
-  logInfo("Outbox: publishing event to Kafka", {
-    outboxId: String(_id),
-    eventId: eventIdStr,
-    tenantId: tenantIdStr,
-    topic,
-    attempt: attempts + 1,
-  });
+  await OutboxEvent.updateMany(
+    { ...eligible, _id: { $in: candidates.map(({ _id }) => _id) } },
+    { $set: { status: "publishing", claimToken } }
+  );
 
-  try {
-    // Build a mock event shape that publishKafkaEvent accepts
-    // publishKafkaEvent expects: { _id, tenantId, type, channel, payload, createdAt }
-    const kafkaMessage = {
-      _id: eventId,
-      tenantId,
-      type: payload.type,
-      channel: payload.channel,
-      payload: payload.payload,
-      createdAt: payload.createdAt,
-    };
-
-    await publishKafkaEvent(kafkaMessage);
-
-    // Mark as published
-    await OutboxEvent.findByIdAndUpdate(_id, {
-      $set: {
-        status: "published",
-        publishedAt: new Date(),
-        lastError: null,
-      },
-      $inc: { attempts: 1 },
-    });
-
-    logInfo("Outbox: event published successfully", {
-      outboxId: String(_id),
-      eventId: eventIdStr,
-      tenantId: tenantIdStr,
-    });
-  } catch (err) {
-    const nextAttempts = attempts + 1;
-    const isExhausted = nextAttempts >= config.maxAttempts;
-    const delayMs = calculateOutboxBackoff(nextAttempts);
-    const nextAttemptAt = new Date(Date.now() + delayMs);
-
-    logWarn("Outbox: Kafka publish failed", {
-      outboxId: String(_id),
-      eventId: eventIdStr,
-      tenantId: tenantIdStr,
-      attempt: nextAttempts,
-      maxAttempts: config.maxAttempts,
-      exhausted: isExhausted,
-      error: err.message,
-      nextAttemptAt: isExhausted ? null : nextAttemptAt.toISOString(),
-    });
-
-    await OutboxEvent.findByIdAndUpdate(_id, {
-      $set: {
-        status: isExhausted ? "failed" : "pending",
-        lastError: err.message,
-        nextAttemptAt: isExhausted ? null : nextAttemptAt,
-      },
-      $inc: { attempts: 1 },
-    });
-
-    if (isExhausted) {
-      logError("Outbox: record marked failed after max attempts", {
-        outboxId: String(_id),
-        eventId: eventIdStr,
-        tenantId: tenantIdStr,
-        attempts: nextAttempts,
-      });
-    }
-  }
+  const records = await OutboxEvent.find({ status: "publishing", claimToken })
+    .sort({ nextAttemptAt: 1, _id: 1 })
+    .lean();
+  return { records, claimToken };
 };
 
-// ── Poll cycle ─────────────────────────────────────────────────────────────────
+const eventForKafka = (record) => ({
+  _id: record.eventId,
+  tenantId: record.tenantId,
+  topic: record.topic,
+  type: record.payload.type,
+  channel: record.payload.channel,
+  payload: record.payload.payload,
+  createdAt: record.payload.createdAt,
+});
 
-const poll = async () => {
-  if (!running) return;
-
-  try {
-    // Recover stale "publishing" records first
-    await recoverStalePublishing();
-
-    // Atomically claim one batch of pending records
-    const now = new Date();
-    const records = [];
-
-    // Claim records one by one to ensure atomic ownership
-    for (let i = 0; i < config.batchSize; i++) {
-      const record = await OutboxEvent.findOneAndUpdate(
-        {
-          status: "pending",
-          $or: [
-            { nextAttemptAt: null },
-            { nextAttemptAt: { $lte: now } },
-          ],
+const markPublished = (records, claimToken) => OutboxEvent.bulkWrite(
+  records.map((record) => ({
+    updateOne: {
+      filter: { _id: record._id, status: "publishing", claimToken },
+      update: {
+        $set: {
+          status: "published", publishedAt: new Date(), lastAttemptAt: new Date(),
+          lastError: null, claimToken: null,
         },
-        { $set: { status: "publishing" } },
-        { returnDocument: 'after', sort: { createdAt: 1 } }
-      );
+        $inc: { attempts: 1 },
+      },
+    },
+  })),
+  { ordered: false }
+);
 
-      if (!record) break;
-      records.push(record);
-    }
+const markPublishFailed = (records, claimToken, error) => {
+  const now = Date.now();
+  return OutboxEvent.bulkWrite(
+    records.map((record) => {
+      const attempts = record.attempts + 1;
+      // maxAttempts is stamped when Event + OutboxEvent are created. Retain
+      // that per-record policy rather than changing exhaustion behaviour if an
+      // environment variable is changed while records are in flight.
+      const maxAttempts = positiveInteger(record.maxAttempts, config.maxAttempts);
+      const exhausted = attempts >= maxAttempts;
+      return {
+        updateOne: {
+          filter: { _id: record._id, status: "publishing", claimToken },
+          update: {
+            $set: {
+              status: exhausted ? "failed" : "pending",
+              claimToken: null,
+              lastError: error.message,
+              lastAttemptAt: new Date(now),
+              failedAt: exhausted ? new Date(now) : null,
+              nextAttemptAt: exhausted ? null : new Date(now + calculateOutboxBackoff(attempts)),
+            },
+            $inc: { attempts: 1 },
+          },
+        },
+      };
+    }),
+    { ordered: false }
+  );
+};
 
-    if (records.length > 0) {
-      logInfo("Outbox: claimed records for publishing", {
-        count: records.length,
-      });
-
-      // Process in parallel (each has its own error handling)
-      await Promise.allSettled(records.map(processOutboxRecord));
-    }
-  } catch (err) {
-    logError("Outbox: poll cycle error", err);
-  }
-
-  // Schedule next poll
-  if (running) {
-    pollerTimer = setTimeout(poll, config.pollIntervalMs);
+const publishClaimedBatch = async (records, claimToken) => {
+  try {
+    await publishKafkaEvents(records.map(eventForKafka), { concurrency: config.concurrency });
+    const result = await markPublished(records, claimToken);
+    logInfo("Outbox: Kafka batch published", { claimed: records.length, published: result.modifiedCount });
+    return { published: result.modifiedCount, failed: 0 };
+  } catch (error) {
+    const result = await markPublishFailed(records, claimToken, error);
+    logWarn("Outbox: Kafka batch publish failed", {
+      claimed: records.length, updated: result.modifiedCount, error: error.message,
+      records: records.map((record) => ({
+        outboxId: String(record._id), eventId: String(record.eventId), tenantId: String(record.tenantId),
+        status: record.attempts + 1 >= positiveInteger(record.maxAttempts, config.maxAttempts) ? "failed" : "pending",
+        attempt: record.attempts + 1,
+      })),
+    });
+    return { published: 0, failed: result.modifiedCount };
   }
 };
 
-// ── Lifecycle ──────────────────────────────────────────────────────────────────
+/** Run one complete outbox cycle. Exported for focused integration tests. */
+export const runOutboxPublisherCycle = async () => {
+  await recoverStalePublishing();
+  const { records, claimToken } = await claimBatch();
+  if (records.length === 0) return { claimed: 0, published: 0, failed: 0 };
 
-/**
- * Start the outbox publisher polling loop.
- * Safe to call multiple times — will not start a second loop.
- */
+  logInfo("Outbox: claimed records for publishing", { count: records.length });
+  const result = await publishClaimedBatch(records, claimToken);
+  return { claimed: records.length, ...result };
+};
+
+const schedulePoll = (delayMs) => {
+  if (running) pollerTimer = setTimeout(runScheduledPoll, delayMs);
+};
+
+const runScheduledPoll = async () => {
+  if (!running) return;
+  activePoll = runOutboxPublisherCycle();
+  let result;
+  try {
+    result = await activePoll;
+  } catch (error) {
+    logError("Outbox: poll cycle error", error);
+  } finally {
+    activePoll = null;
+  }
+  if (running) schedulePoll(result?.claimed === config.batchSize ? 0 : config.pollIntervalMs);
+};
+
 export const startOutboxPublisher = () => {
   if (running) return;
   running = true;
   logInfo("Outbox publisher started", {
     pollIntervalMs: config.pollIntervalMs,
     batchSize: config.batchSize,
+    concurrency: config.concurrency,
     maxAttempts: config.maxAttempts,
   });
-  // Start immediately, then poll on interval
-  poll();
+  schedulePoll(0);
 };
 
-/**
- * Stop the outbox publisher gracefully.
- * Waits for the current poll cycle to finish before stopping.
- */
-export const stopOutboxPublisher = () => {
+/** Stop scheduling work and wait for the currently claimed batch to settle. */
+export const stopOutboxPublisher = async () => {
   running = false;
   if (pollerTimer) {
     clearTimeout(pollerTimer);
     pollerTimer = null;
   }
+  if (activePoll) await activePoll.catch(() => {});
   logInfo("Outbox publisher stopped");
 };

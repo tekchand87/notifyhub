@@ -22,7 +22,7 @@ export const requireAuth = async (req, res, next) => {
 
     // Find user from database
     const user = await User.findById(payload.userId)
-      .select("name email tenantId role isActive");
+      .select("name email tenantId role isActive tokenVersion");
 
     // Check user exists
     if (!user) {
@@ -38,6 +38,10 @@ export const requireAuth = async (req, res, next) => {
         "User is not active",
         403
       );
+    }
+
+    if ((payload.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
+      throw new AppError("Authentication token has been revoked", 401);
     }
 
     // Attach user to request

@@ -33,11 +33,17 @@ export const updateTenantSchema = z
 
 
 export const updateWebhookConfigSchema = z.object({
-  // Allow https:// and http:// (http allowed for local dev with WEBHOOK_ALLOW_LOCALHOST=true)
+  // Production HTTPS enforcement is repeated at delivery time after DNS lookup.
   webhookUrl : z
     .string()
     .trim()
     .url("webhookUrl must be a valid URL")
+    .refine((value) => {
+      const url = new URL(value);
+      if (url.protocol === "https:") return true;
+      return process.env.NODE_ENV !== "production" && url.protocol === "http:" &&
+        (process.env.WEBHOOK_ALLOW_LOCALHOST === "true" || process.env.WEBHOOK_ALLOW_INSECURE_HTTP === "true");
+    }, "webhookUrl must use HTTPS (HTTP is development-only with explicit opt-in)")
     .max(2048, "webhookUrl cannot exceed 2048 characters")
     .nullable()
     .optional(),

@@ -41,7 +41,7 @@ const idempotencySchema = new mongoose.Schema(
 
     // ── Result ─────────────────────────────────────────────────────────────────
     // Status of this idempotency record.
-    //   pending  — created but the event creation transaction has not yet committed
+    //   pending  — reservation held while the creation transaction is in flight
     //   complete — event successfully created; response is cached
     status: {
       type: String,
@@ -61,6 +61,14 @@ const idempotencySchema = new mongoose.Schema(
     // Null until status = complete.
     responseBody: {
       type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    // A pending reservation may be reclaimed only after this lease expires.
+    // It prevents a process crash before the transaction from blocking the key
+    // until the much longer idempotency retention TTL expires.
+    pendingExpiresAt: {
+      type: Date,
       default: null,
     },
 

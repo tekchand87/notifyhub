@@ -49,9 +49,13 @@ export const requireApiKey = async (
     req.apiKey = apiKey;
     req.tenantId = apiKey.tenantId;
 
-    apiKey.lastUsedAt = new Date();
-
-    await apiKey.save();
+    // Do not turn every authenticated event into a MongoDB write. Visibility is
+    // retained while writes are bounded to one per key per configured interval.
+    const touchBefore = new Date(Date.now() - (Number(process.env.API_KEY_LAST_USED_UPDATE_MS) || 300_000));
+    ApiKey.updateOne(
+      { _id: apiKey._id, $or: [{ lastUsedAt: null }, { lastUsedAt: { $lt: touchBefore } }] },
+      { $set: { lastUsedAt: new Date() } }
+    ).exec().catch(() => {});
 
     next();
   } catch (error) {

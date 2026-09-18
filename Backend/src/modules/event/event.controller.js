@@ -1,5 +1,6 @@
 // src/modules/event/event.controller.js
 import * as eventService from "./event.service.js";
+import { incrementMetric } from "../../infrastructure/observability/metrics.js";
 
 export const createEvent = async (req, res, next) => {
   try {
@@ -12,6 +13,7 @@ export const createEvent = async (req, res, next) => {
         idempotencyRecordId: req.idempotencyRecord?._id ?? null,
       }
     );
+    incrementMetric("events_ingested_total", { channel: req.body.channel });
 
     return res.status(202).json({
       success: true,
@@ -19,6 +21,7 @@ export const createEvent = async (req, res, next) => {
       data: result,
     });
   } catch (error) {
+    incrementMetric("events_failed_total", { operation: "ingest" });
     next(error);
   }
 };

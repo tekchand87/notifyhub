@@ -109,7 +109,10 @@ export const scheduleRetry = async (eventId, tenantId, currentAttempts, error) =
   const delayMs = calculateBackoffDelay(nextAttempt);
   const nextRetryAt = new Date(Date.now() + delayMs);
 
-  await markEventRetryWait(eventId, nextRetryAt, currentAttempts + 1, error.message);
+  const updated = await markEventRetryWait(eventId, nextRetryAt, currentAttempts + 1, error.message);
+  if (!updated) {
+    throw new Error("Durable event transition did not apply: processing -> retry_wait");
+  }
 
   logRetryScheduled({
     eventId,
@@ -140,8 +143,12 @@ export const moveToDLQ = async (eventId, tenantId, channel, attempts, lastError,
 
   logRetryExhausted({ eventId, tenantId, attempts, reason });
 
-  // 1. Update DB status to dlq (always — even if Kafka publish fails)
-  await markEventDLQ(eventId, lastError?.message ?? reason);
+  // 1. Update DB status to dlq. This MongoDB terminal state is the durable
+  // outcome needed before the Kafka source record can be acknowledged.
+  const updated = await markEventDLQ(eventId, lastError?.message ?? reason);
+  if (!updated) {
+    throw new Error("Durable event transition did not apply: processing -> dlq");
+  }
 
   // 2. Publish to Kafka DLQ topic (best-effort)
   const dlqResult = await publishToDLQ({

@@ -65,11 +65,20 @@ const outboxEventSchema = new mongoose.Schema(
     // pending    → ready to be published
     // publishing → atomically claimed by a publisher; in-flight
     // published  → successfully published to Kafka (terminal)
-    // failed     → exceeded maxAttempts; will not be retried (terminal)
+    // failed     → automatic retries exhausted; retained for tenant-admin replay
     status: {
       type: String,
       enum: ["pending", "publishing", "published", "failed"],
       default: "pending",
+    },
+
+    // A unique token assigned when a publisher atomically claims the record.
+    // It prevents an old/stale publisher from completing a record that has
+    // already been recovered and claimed by another publisher.
+    claimToken: {
+      type: String,
+      default: null,
+      index: true,
     },
 
     // ── Retry tracking ──────────────────────────────────────────────────────────
@@ -101,6 +110,41 @@ const outboxEventSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    lastAttemptAt: {
+      type: Date,
+      default: null,
+    },
+
+    // Retained when a tenant administrator requeues a failed record. `attempts`
+    // is reset for the new bounded automatic-retry cycle, while this preserves
+    // the previous cycle's diagnostic count.
+    lastFailureAttempts: {
+      type: Number,
+      default: null,
+    },
+
+    failedAt: {
+      type: Date,
+      default: null,
+    },
+
+    replayCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    replayedAt: {
+      type: Date,
+      default: null,
+    },
+
+    replayedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -113,6 +157,9 @@ const outboxEventSchema = new mongoose.Schema(
 // PRIMARY: Poller query — efficiently find pending records due for publishing.
 // Covers: { status: "pending", nextAttemptAt: { $lte: now } }
 outboxEventSchema.index({ status: 1, nextAttemptAt: 1 });
+
+// Stale publishing recovery: { status: "publishing", updatedAt: { $lte: now } }
+outboxEventSchema.index({ status: 1, updatedAt: 1 });
 
 // UNIQUE on eventId: one OutboxEvent per Event, prevents accidental duplicates.
 outboxEventSchema.index({ eventId: 1 }, { unique: true });

@@ -26,6 +26,13 @@ const getTTLMs = () => {
   return hours * 60 * 60 * 1000;
 };
 
+const getPendingLeaseMs = () => {
+  const configured = Number(process.env.IDEMPOTENCY_PENDING_LEASE_MS);
+  return Number.isSafeInteger(configured) && configured >= 1_000
+    ? configured
+    : 60_000;
+};
+
 // ─── Key validation ────────────────────────────────────────────────────────────
 
 const KEY_PATTERN = /^[a-zA-Z0-9\-_.]+$/;
@@ -67,12 +74,24 @@ export const validateIdempotencyKey = (key) => {
  * @returns {string} hex-encoded SHA-256 hash
  */
 export const computeFingerprint = (body) => {
-  // Use a stable serialization: sort keys to be consistent
-  const canonical = JSON.stringify({
+  const canonicalize = (value) => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (value && typeof value === "object") {
+      return Object.keys(value).sort().reduce((result, key) => {
+        result[key] = canonicalize(value[key]);
+        return result;
+      }, {});
+    }
+    return value;
+  };
+
+  // Nested payload keys are sorted too, so semantically identical JSON bodies
+  // do not conflict merely because clients serialized object keys differently.
+  const canonical = JSON.stringify(canonicalize({
     type: body.type,
     channel: body.channel,
     payload: body.payload,
-  });
+  }));
   return crypto.createHash("sha256").update(canonical).digest("hex");
 };
 
@@ -93,7 +112,9 @@ export const computeFingerprint = (body) => {
  * @returns {Promise<{ claimed: boolean, record: object, replayed?: boolean }>}
  */
 export const claimIdempotencySlot = async (tenantId, key, fingerprint) => {
-  const expiresAt = new Date(Date.now() + getTTLMs());
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + getTTLMs());
+  const pendingExpiresAt = new Date(now.getTime() + getPendingLeaseMs());
 
   try {
     // Attempt atomic insert — if the unique index rejects it, we catch below
@@ -103,6 +124,7 @@ export const claimIdempotencySlot = async (tenantId, key, fingerprint) => {
       fingerprint,
       status: "pending",
       expiresAt,
+      pendingExpiresAt,
     });
 
     // We are the first request. Signal the caller to proceed.
@@ -121,20 +143,40 @@ export const claimIdempotencySlot = async (tenantId, key, fingerprint) => {
         );
       }
 
+      if (existing.fingerprint !== fingerprint) {
+        throw new AppError(
+          "Idempotency-Key was already used with a different request payload. Use a new key for different requests.",
+          409
+        );
+      }
+
       // ── Complete record (event already created) ───────────────────────────
       if (existing.status === "complete") {
-        if (existing.fingerprint !== fingerprint) {
-          throw new AppError(
-            "Idempotency-Key was already used with a different request payload. Use a new key for different requests.",
-            409
-          );
-        }
         // Same key + same fingerprint → replay cached response
         return { claimed: false, record: existing, replayed: true };
       }
 
-      // ── Pending record (the original request is still executing) ──────────
-      // This is a concurrent duplicate. Tell the client to retry shortly.
+      // ── Pending record: reclaim only an expired crash reservation ─────────
+      // Legacy pending records without a lease are reclaimable after the same
+      // lease period from creation. This avoids a migration requirement.
+      const pendingExpired = existing.pendingExpiresAt
+        ? existing.pendingExpiresAt <= now
+        : existing.createdAt <= new Date(now.getTime() - getPendingLeaseMs());
+
+      if (pendingExpired) {
+        const leaseFilter = existing.pendingExpiresAt
+          ? { pendingExpiresAt: { $lte: now } }
+          : { pendingExpiresAt: null, createdAt: { $lte: new Date(now.getTime() - getPendingLeaseMs()) } };
+        const reclaimed = await IdempotencyRecord.findOneAndUpdate(
+          { _id: existing._id, tenantId, key, status: "pending", fingerprint, ...leaseFilter },
+          { $set: { pendingExpiresAt, expiresAt } },
+          { returnDocument: "after" }
+        );
+        if (reclaimed) return { claimed: true, record: reclaimed, recovered: true };
+      }
+
+      // A live reservation is deterministic in-progress behavior. Do not wait
+      // or hold a transaction open for the owning request.
       throw new AppError(
         "A request with this Idempotency-Key is already being processed. Please wait and retry if needed.",
         409
@@ -154,19 +196,26 @@ export const claimIdempotencySlot = async (tenantId, key, fingerprint) => {
  * @param {object} responseBody - The full response body to cache for replay
  * @returns {Promise<void>}
  */
-export const markIdempotencyComplete = async (recordId, eventId, responseBody) => {
-  await IdempotencyRecord.findByIdAndUpdate(recordId, {
+export const markIdempotencyComplete = async (recordId, eventId, responseBody, session) => {
+  const result = await IdempotencyRecord.updateOne({ _id: recordId, status: "pending" }, {
     $set: {
       status: "complete",
       eventId,
       responseBody,
+      pendingExpiresAt: null,
     },
-  });
+  }, { session });
+  if (result.modifiedCount !== 1) {
+    throw new Error("Idempotency reservation was not pending during transaction completion");
+  }
 };
 
+export const getPendingLeaseMsForTests = getPendingLeaseMs;
+
 /**
- * Delete an idempotency record on transaction rollback.
- * Allows the client to safely retry with the same key.
+ * Delete an idempotency record for explicit maintenance/test cleanup only.
+ * The transactional event path intentionally does not call this on failure:
+ * an uncertain transaction commit must remain protected by its reservation.
  *
  * @param {string} recordId
  * @returns {Promise<void>}

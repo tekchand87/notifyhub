@@ -20,6 +20,10 @@ for(const key of requiredEnv){
   }
 }
 
+if (process.env.NODE_ENV === "production" && process.env.RATE_LIMIT_ENABLED !== "false" && !process.env.REDIS_URL) {
+  throw new Error("Missing required environment variable : REDIS_URL (production rate limiting)");
+}
+
 export const env = {
   PORT         : process.env.PORT || 3000,
   NODE_ENV     : process.env.NODE_ENV || "development",

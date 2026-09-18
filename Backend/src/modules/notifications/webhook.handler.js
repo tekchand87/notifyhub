@@ -72,6 +72,9 @@ export const handleWebhook = async (event) => {
 
   // ── 2. Build the payload — use existing NotifyHub event schema ─────────────
   const webhookPayload = {
+    // Event IDs are stable across Kafka/provider retries and let receivers
+    // deduplicate retries of the same logical notification.
+    deliveryId: event.eventId,
     eventId: event.eventId,
     eventType: event.type,
     tenantId: event.tenantId,

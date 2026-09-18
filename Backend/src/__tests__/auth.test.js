@@ -8,6 +8,7 @@ import request from "supertest";
 import { MongoMemoryReplSet } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
+import { User } from "../modules/auth/user.model.js";
 
 // ── Environment setup (must run BEFORE any app imports) ───────────────────────
 const TEST_JWT_SECRET = "test-jwt-secret-for-auth-tests";
@@ -120,6 +121,13 @@ describe("Bug #1 — Malformed JWT must return 401", () => {
       .set("Authorization", "invalid-format");
     expect(res.status).toBe(401);
   });
+
+  it("outbox replay requires authenticated tenant-admin access", async () => {
+    const res = await request(app)
+      .post(`/api/v1/outbox/${new mongoose.Types.ObjectId()}/replay`);
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
+  });
 });
 
 // ─── Bug #2: Invalid login credentials → 401 ─────────────────────────────────
@@ -178,5 +186,19 @@ describe("Bug #2 — Invalid login must return 401 (not 409)", () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data.accessToken).toBeTruthy();
     expect(typeof res.body.data.accessToken).toBe("string");
+  });
+
+  it("member role cannot replay outbox records", async () => {
+    await User.updateOne({ email: testUser.email }, { $set: { role: "member" } });
+    const login = await request(app)
+      .post("/api/v1/auth/login")
+      .send({ email: testUser.email, password: testUser.password });
+
+    const res = await request(app)
+      .post(`/api/v1/outbox/${new mongoose.Types.ObjectId()}/replay`)
+      .set("Authorization", `Bearer ${login.body.data.accessToken}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
   });
 });

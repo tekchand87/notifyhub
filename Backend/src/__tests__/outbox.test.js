@@ -12,6 +12,21 @@ import mongoose from "mongoose";
 import { OutboxEvent } from "../modules/event/outbox.model.js";
 import { Event } from "../modules/event/event.model.js";
 
+vi.mock("../infrastructure/kafka/kafka.producer.js", () => ({
+  publishKafkaEvents: vi.fn(),
+}));
+
+import { publishKafkaEvents } from "../infrastructure/kafka/kafka.producer.js";
+import {
+  runOutboxPublisherCycle,
+  startOutboxPublisher,
+  stopOutboxPublisher,
+} from "../infrastructure/outbox/outbox.publisher.js";
+import {
+  listOutboxForTenant,
+  replayFailedOutboxEvent,
+} from "../modules/event/outbox.service.js";
+
 let replSet;
 
 beforeAll(async () => {
@@ -25,6 +40,8 @@ afterAll(async () => {
 }, 15_000);
 
 beforeEach(async () => {
+  await stopOutboxPublisher();
+  vi.clearAllMocks();
   await Event.deleteMany({});
   await OutboxEvent.deleteMany({});
 });
@@ -248,3 +265,172 @@ describe("OutboxEvent — stale publishing recovery", () => {
   });
 });
 
+// ─── Batched publisher integration ───────────────────────────────────────────
+
+describe("Outbox publisher — batched throughput path", () => {
+  const makeRecord = (overrides = {}) => OutboxEvent.create({
+    tenantId: new mongoose.Types.ObjectId(),
+    eventId: new mongoose.Types.ObjectId(),
+    topic: "test-topic",
+    key: "tenant-key",
+    payload: {
+      type: "test.event",
+      channel: "webhook",
+      payload: { value: 1 },
+      createdAt: new Date(),
+    },
+    maxAttempts: 3,
+    ...overrides,
+  });
+
+  it("concurrent publishers atomically claim each record once", async () => {
+    await Promise.all(Array.from({ length: 25 }, () => makeRecord()));
+    publishKafkaEvents.mockResolvedValue([]);
+
+    const [first, second] = await Promise.all([
+      runOutboxPublisherCycle(),
+      runOutboxPublisherCycle(),
+    ]);
+
+    expect(first.claimed + second.claimed).toBe(25);
+    expect(first.published + second.published).toBe(25);
+    expect(await OutboxEvent.countDocuments({ status: "published" })).toBe(25);
+    expect(await OutboxEvent.countDocuments({ status: "publishing" })).toBe(0);
+  });
+
+  it("publishes a successful claimed batch in one Kafka call", async () => {
+    await Promise.all(Array.from({ length: 8 }, () => makeRecord()));
+    publishKafkaEvents.mockResolvedValue([]);
+
+    const result = await runOutboxPublisherCycle();
+
+    expect(result).toMatchObject({ claimed: 8, published: 8, failed: 0 });
+    expect(publishKafkaEvents).toHaveBeenCalledTimes(1);
+    expect(publishKafkaEvents.mock.calls[0][0]).toHaveLength(8);
+    expect(await OutboxEvent.countDocuments({ status: "published", attempts: 1 })).toBe(8);
+  });
+
+  it("returns a failed Kafka batch to pending with retry metadata", async () => {
+    const record = await makeRecord();
+    publishKafkaEvents.mockRejectedValue(new Error("Kafka unavailable"));
+
+    const result = await runOutboxPublisherCycle();
+    const updated = await OutboxEvent.findById(record._id).lean();
+
+    expect(result).toMatchObject({ claimed: 1, published: 0, failed: 1 });
+    expect(updated.status).toBe("pending");
+    expect(updated.attempts).toBe(1);
+    expect(updated.lastError).toBe("Kafka unavailable");
+    expect(updated.nextAttemptAt).toBeInstanceOf(Date);
+    expect(updated.claimToken).toBeNull();
+  });
+
+  it("recovers a stale claim before publishing it", async () => {
+    const record = await makeRecord({ status: "publishing", claimToken: "dead-worker" });
+    await OutboxEvent.collection.updateOne(
+      { _id: record._id },
+      { $set: { updatedAt: new Date(Date.now() - 120_000) } }
+    );
+    publishKafkaEvents.mockResolvedValue([]);
+
+    const result = await runOutboxPublisherCycle();
+
+    expect(result).toMatchObject({ claimed: 1, published: 1 });
+    expect(await OutboxEvent.countDocuments({ _id: record._id, status: "published" })).toBe(1);
+  });
+
+  it("graceful shutdown waits for an in-flight batch and stops future polling", async () => {
+    await makeRecord();
+    let releasePublish;
+    publishKafkaEvents.mockImplementation(() => new Promise((resolve) => { releasePublish = resolve; }));
+
+    startOutboxPublisher();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const stopping = stopOutboxPublisher();
+    let stopped = false;
+    stopping.then(() => { stopped = true; });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(stopped).toBe(false);
+
+    releasePublish([]);
+    await stopping;
+    expect(await OutboxEvent.countDocuments({ status: "published" })).toBe(1);
+  });
+});
+
+// ─── Recoverable automatic failure + tenant-admin replay ─────────────────────
+
+describe("Outbox recovery — no Kafka outage orphaning", () => {
+  const makeRecord = async (tenantId, overrides = {}) => OutboxEvent.create({
+    tenantId,
+    eventId: new mongoose.Types.ObjectId(),
+    topic: "test-topic",
+    key: String(tenantId),
+    payload: { type: "test.event", channel: "webhook", payload: { value: 1 }, createdAt: new Date() },
+    maxAttempts: 2,
+    ...overrides,
+  });
+
+  it("retains the Event and recoverable failed outbox record after automatic retries exhaust", async () => {
+    const tenantId = new mongoose.Types.ObjectId();
+    const event = await Event.create({
+      tenantId, type: "TEST_EVENT", channel: "webhook", payload: { value: 1 }, status: "queued",
+    });
+    const record = await OutboxEvent.create({
+      tenantId, eventId: event._id, topic: "test-topic", key: String(tenantId),
+      payload: { type: "TEST_EVENT", channel: "webhook", payload: { value: 1 }, createdAt: new Date() },
+      maxAttempts: 2,
+    });
+    publishKafkaEvents.mockRejectedValue(new Error("Kafka unavailable"));
+
+    await runOutboxPublisherCycle();
+    await OutboxEvent.updateOne({ _id: record._id }, { $set: { nextAttemptAt: null } });
+    await runOutboxPublisherCycle();
+
+    const exhausted = await OutboxEvent.findById(record._id).lean();
+    expect(await Event.exists({ _id: event._id })).not.toBeNull();
+    expect(exhausted).toMatchObject({ status: "failed", attempts: 2, lastError: "Kafka unavailable" });
+    expect(exhausted.failedAt).toBeInstanceOf(Date);
+    expect(exhausted.claimToken).toBeNull();
+
+    const visible = await listOutboxForTenant(String(tenantId), { status: "failed" });
+    expect(visible.counts.failed).toBe(1);
+    expect(visible.records[0]).toMatchObject({ id: record._id, eventId: event._id, status: "failed", attempts: 2 });
+  });
+
+  it("atomically replays a failed record and publishes it after Kafka is restored", async () => {
+    const tenantId = new mongoose.Types.ObjectId();
+    const operatorId = new mongoose.Types.ObjectId();
+    const record = await makeRecord(tenantId, {
+      status: "failed", attempts: 2, lastError: "Kafka unavailable", failedAt: new Date(),
+    });
+
+    const replayed = await replayFailedOutboxEvent(String(tenantId), String(record._id), operatorId);
+    expect(replayed).toMatchObject({ status: "pending", attempts: 0, lastFailureAttempts: 2, replayCount: 1 });
+    expect(replayed.lastError).toBeNull();
+
+    publishKafkaEvents.mockResolvedValue([]);
+    const result = await runOutboxPublisherCycle();
+    const published = await OutboxEvent.findById(record._id).lean();
+
+    expect(result).toMatchObject({ claimed: 1, published: 1, failed: 0 });
+    expect(published).toMatchObject({ status: "published", attempts: 1, replayCount: 1 });
+    expect(published.publishedAt).toBeInstanceOf(Date);
+  });
+
+  it("prevents cross-tenant and repeated replay", async () => {
+    const ownerTenantId = new mongoose.Types.ObjectId();
+    const otherTenantId = new mongoose.Types.ObjectId();
+    const record = await makeRecord(ownerTenantId, { status: "failed", attempts: 2 });
+
+    await expect(replayFailedOutboxEvent(String(otherTenantId), String(record._id), new mongoose.Types.ObjectId()))
+      .rejects.toMatchObject({ statusCode: 404 });
+
+    const results = await Promise.allSettled([
+      replayFailedOutboxEvent(String(ownerTenantId), String(record._id), new mongoose.Types.ObjectId()),
+      replayFailedOutboxEvent(String(ownerTenantId), String(record._id), new mongoose.Types.ObjectId()),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")[0].reason.statusCode).toBe(409);
+  });
+});

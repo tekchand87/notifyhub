@@ -87,7 +87,8 @@ describe("eventPublishLimiter — API key based keying", () => {
         path: "/api/v1/events",
         headers: {},
         socket: { remoteAddress: "1.2.3.4" },
-        apiKey: { keyPrefix: "abc123" }, // Simulates resolved API key
+        apiKey: { _id: "api-key-1", keyPrefix: "abc123" }, // Simulates resolved API key
+        tenantId: "tenant-1",
       };
       const res = {
         setHeader: () => {},
@@ -103,7 +104,7 @@ describe("eventPublishLimiter — API key based keying", () => {
     });
   });
 
-  it("falls back to IP when no apiKey is resolved", () => {
+  it("requires API-key middleware to establish tenant context", () => {
     return new Promise((resolve, reject) => {
       const req = {
         ip: "5.6.7.8",
@@ -111,7 +112,7 @@ describe("eventPublishLimiter — API key based keying", () => {
         path: "/api/v1/events",
         headers: {},
         socket: { remoteAddress: "5.6.7.8" },
-        apiKey: null, // Not yet resolved
+        apiKey: null,
       };
       const res = {
         setHeader: () => {},
@@ -119,8 +120,8 @@ describe("eventPublishLimiter — API key based keying", () => {
         status: () => ({ json: () => {} }),
       };
       const next = (err) => {
-        if (err) reject(err);
-        else resolve();
+        if (err) resolve();
+        else reject(new Error("expected missing API-key context to be rejected"));
       };
 
       eventPublishLimiter(req, res, next);

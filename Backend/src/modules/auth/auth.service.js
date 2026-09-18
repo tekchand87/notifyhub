@@ -1,4 +1,5 @@
 import bcrypt from "bcrypt";
+import mongoose from "mongoose";
 
 import {User} from "./user.model.js";
 import {Tenant} from "../tenant/tenant.model.js";
@@ -20,25 +21,23 @@ const toSafeUser = (user)=>({
 });
 
 export const register  = async ({name,email,password,tenantName})=>{
-  const existingUser = await User.findOne({email});
-
-  if(existingUser){
-    throw new AppError("an account with this email already exists",409);
-  }
-  const tenant  = await Tenant.create({
-    name : tenantName,
-    slug : buildTenantSlug(tenantName)
-  });
-
   const HashPassword = await bcrypt.hash(password,SALTS_ROUNDS);
-
-  const user = await User.create({
-    name,
-    email,
-    passwordHash:HashPassword,
-    tenantId: tenant._id,
-    role : USER_ROLES.TENANT_ADMIN
-  });
+  const session = await mongoose.startSession();
+  let tenant;
+  let user;
+  try {
+    await session.withTransaction(async () => {
+      [tenant] = await Tenant.create([{ name: tenantName, slug: buildTenantSlug(tenantName) }], { session });
+      [user] = await User.create([{
+        name, email, passwordHash: HashPassword, tenantId: tenant._id, role: USER_ROLES.TENANT_ADMIN,
+      }], { session });
+    });
+  } catch (error) {
+    if (error?.code === 11000) throw new AppError("An account or tenant with that identity already exists", 409);
+    throw error;
+  } finally {
+    await session.endSession();
+  }
 
   const accessToken = generateAccessToken(user);
 
@@ -101,13 +100,13 @@ export const changePassword = async(userId,currentPassword,newPassword)=>{
   const newPasswordHash = await bcrypt.hash(newPassword,SALTS_ROUNDS);
 
   user.passwordHash = newPasswordHash;
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
 
   return {
     message : "Password changed successfully"
   };
 };
-
 
 
 

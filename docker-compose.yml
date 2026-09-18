@@ -1,4 +1,14 @@
 services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: notifyhub-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - notifyhub_redis_data:/data
+
   mongodb:
     image: mongo:8
     container_name: notifyhub-mongodb
@@ -71,5 +81,6 @@ services:
       - notifyhub_kafka_data:/var/lib/kafka/data
 
 volumes:
+  notifyhub_redis_data:
   notifyhub_mongodb_data:
   notifyhub_kafka_data:

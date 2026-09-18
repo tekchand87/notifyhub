@@ -102,6 +102,8 @@ See [`Backend/.env.example`](Backend/.env.example) for the full reference.
 | `KAFKA_DLQ_TOPIC` | `notifyhub.events.dlq` | DLQ Kafka topic name |
 | `WEBHOOK_TIMEOUT_MS` | `10000` | Webhook HTTP request timeout |
 | `WEBHOOK_ALLOW_LOCALHOST` | `false` | Allow localhost webhook targets (dev only) |
+| `REDIS_URL` | `redis://localhost:6379` | Shared Redis endpoint for rate limiting; required in production |
+| `RATE_LIMIT_FAILURE_MODE` | `fail-open` | Redis-outage policy: `fail-open` or `fail-closed` |
 
 ## Webhook Delivery
 
@@ -206,21 +208,47 @@ DLQ messages include:
 
 ## Rate Limiting
 
-| Endpoint category | Limit | Window |
-|---|---|---|
-| `POST /auth/login`, `POST /auth/register` | 10 requests | 15 minutes per IP |
-| All `/api/v1/*` routes | 100 requests | 1 minute per IP |
-| `POST /api/v1/events` (event publishing) | 60 requests | 1 minute per API key |
-| `/health`, `/health/kafka` | Unlimited | — |
+NotifyHub uses Redis-backed token buckets, shared by all API instances. Each bucket has a sustained rate and an independent burst capacity; counters expire automatically after inactivity.
 
-Returns `HTTP 429` with:
+| Scope | Default sustained rate | Default burst | Purpose |
+|---|---:|---:|---|
+| Authentication IP | 10 / 15 min | 10 | Brute-force protection |
+| API IP | 1000 req/s | 2000 | Source abuse protection |
+| Event global | 1000 events/s | 2000 | Cluster safety ceiling |
+| Event tenant | 1000 events/s | 2000 | Tenant capacity isolation |
+| Event API key | 1000 events/s | 2000 | Credential-level isolation |
+
+Event publishing checks global, tenant, and API-key buckets atomically. Two API keys of the same tenant therefore share the tenant quota, while different tenants are isolated. Tenant records may set `ingestionRateLimit.eventsPerSecond` and `ingestionRateLimit.burst` to override the tenant defaults without code changes; updates are applied after the bounded quota-cache TTL.
+
+Redis keys contain only a one-way hash of IP, tenant ID, or API-key ID—not raw credentials or request headers. Redis uses `REDIS_URL`; use an authenticated `rediss://` endpoint in production. The included Docker Compose Redis service is development-only and has no authentication.
+
+Express ignores `X-Forwarded-For` unless `TRUST_PROXY` is explicitly configured with known proxy IPs/CIDRs. Do not set it to a broad value in production.
+
+If Redis is unavailable, `RATE_LIMIT_FAILURE_MODE=fail-open` preserves API availability but temporarily removes quota enforcement. `fail-closed` returns HTTP 503 and protects capacity. Choose and document that tradeoff per deployment. `/health` remains liveness-only; `/health/redis` exposes Redis dependency readiness.
+
+The default event limits are candidate capacity settings, not throughput proof. Run the staged k6 load test before treating 1,000 events/s as a supported production result.
+
+Rate-limited requests return `429` with `Retry-After`, `RateLimit-Remaining`, and `RateLimit-Reset` headers:
 ```json
 { "success": false, "message": "Too many requests — please try again later" }
 ```
 
-> **Production note**: The current in-memory rate limiter is suitable for single-instance deployments. For multi-instance production, replace with a Redis-backed store (`rate-limit-redis`).
-
 ## Kafka Health Check
+
+## Kafka topic contract
+
+Deployment tooling—not the API or worker—must provision Kafka topics. The worker validates that the following topics already exist and meet their minimum partition counts:
+
+| Topic | Local partitions | Local replication | Purpose |
+|---|---:|---:|---|
+| `KAFKA_TOPIC` (`notifyhub.events`) | 6 | 1 | Event ingestion; tenant ID is the key to preserve per-tenant ordering |
+| `KAFKA_DLQ_TOPIC` (`notifyhub.events.dlq`) | 1 | 1 | Poisoned/exhausted delivery records |
+
+Production must set partition, replication, `min.insync.replicas`, retention, and cleanup policy declaratively in its Kafka deployment. The one-broker Compose environment is not a production replication model.
+
+## Delivery tenant migration
+
+Before deploying the required `Delivery.tenantId` field against existing data, first run `node Backend/src/scripts/backfill-delivery-tenant-id.js` for a dry run and then rerun with `--apply`. Investigate any `unresolved` records; the script never deletes data.
 
 ```
 GET /health/kafka
@@ -300,6 +328,7 @@ GET  /api/v1/events/:id           # Get event detail (JWT required)
 ```
 GET /health
 GET /health/kafka
+GET /health/redis
 ```
 
 ## Event Status Flow

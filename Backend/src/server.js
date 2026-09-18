@@ -17,10 +17,19 @@ import {
   startOutboxPublisher,
   stopOutboxPublisher,
 } from "./infrastructure/outbox/outbox.publisher.js";
+import { connectRedis, disconnectRedis } from "./infrastructure/redis/redis.client.js";
 
 const startServer = async () => {
   // 1. Connect to MongoDB (required before anything else)
   await connectMongoDB();
+
+  // Redis is shared by every API process for distributed rate limiting. A
+  // connection failure does not crash startup; request behavior follows the
+  // explicit RATE_LIMIT_FAILURE_MODE policy.
+  await connectRedis().then(
+    () => console.log("Redis rate-limit client connected"),
+    () => console.warn("Redis rate-limit client unavailable at startup")
+  );
 
   // 2. Connect Kafka producer (required by outbox publisher)
   try {
@@ -46,8 +55,9 @@ const startServer = async () => {
   // 5. Graceful shutdown
   const shutdown = async (signal) => {
     console.log(`\n[${signal}] Shutting down API server...`);
-    stopOutboxPublisher();
+    await stopOutboxPublisher();
     await disconnectKafkaProducer().catch(() => {});
+    await disconnectRedis().catch(() => {});
     server.close(() => {
       console.log("HTTP server closed");
       process.exit(0);

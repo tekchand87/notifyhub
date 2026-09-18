@@ -48,5 +48,8 @@ const apiKeySchema = new mongoose.Schema({
 });
 
 apiKeySchema.index({tenantId : 1 , isActive : 1 });
+// keyHash is the authentication lookup identity; unique indexing both enforces
+// collision safety and makes findOne({ keyHash, isActive }) an indexed lookup.
+apiKeySchema.index({ keyHash: 1 }, { unique: true });
 
 export const apiKey = mongoose.model("ApiKey",apiKeySchema);

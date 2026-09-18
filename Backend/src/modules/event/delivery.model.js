@@ -13,6 +13,12 @@ const deliverySchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    tenantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Tenant",
+      required: true,
+      index: true,
+    },
 
     attemptNumber: {
       type: Number,
@@ -65,6 +71,6 @@ const deliverySchema = new mongoose.Schema(
 );
 
 // Efficiently list all attempts for an event
-deliverySchema.index({ eventId: 1, attemptNumber: 1 });
+deliverySchema.index({ tenantId: 1, eventId: 1, attemptedAt: -1 });
 
 export const Delivery = mongoose.model("Delivery", deliverySchema);

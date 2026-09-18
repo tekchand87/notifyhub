@@ -39,6 +39,12 @@ const tenantSchema = new mongoose.Schema(
       enum : TENANT_STATUS_VALUES,
       default : "active",
     },
+    // Capacity controls only; these are not subscription or billing fields.
+    // Null values inherit the environment-wide tenant defaults.
+    ingestionRateLimit: {
+      eventsPerSecond: { type: Number, min: 0, default: null },
+      burst: { type: Number, min: 0, default: null },
+    },
 
     // ── Webhook delivery configuration ───────────────────────────────────────
     // webhookUrl: the HTTPS endpoint NotifyHub POSTs events to.

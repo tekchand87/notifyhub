@@ -27,7 +27,6 @@ import { AppError } from "../../utils/AppError.js";
 import { retryConfig } from "../../config/retry.config.js";
 import {
   markIdempotencyComplete,
-  deleteIdempotencyRecord,
 } from "./idempotency.service.js";
 
 // ─── Event Publishing ─────────────────────────────────────────────────────────
@@ -53,7 +52,7 @@ export const publishEvent = async (tenantId, input, options = {}) => {
   // the process crashes immediately after this commit.
   const session = await mongoose.startSession();
 
-  let createdEvent;
+  let responseBody;
 
   try {
     await session.withTransaction(async () => {
@@ -70,8 +69,6 @@ export const publishEvent = async (tenantId, input, options = {}) => {
         ],
         { session }
       );
-
-      createdEvent = event;
 
       // Create the corresponding OutboxEvent (same transaction)
       // The payload is serialized now to avoid depending on the live document later
@@ -96,46 +93,41 @@ export const publishEvent = async (tenantId, input, options = {}) => {
         ],
         { session }
       );
+
+      responseBody = {
+        success: true,
+        message: "Event accepted",
+        data: {
+          eventId: event._id,
+          status: event.status,
+          createdAt: event.createdAt,
+          outboxPending: true,
+        },
+      };
+
+      // The reservation was created before this transaction for uniqueness, but
+      // its completion is committed with Event + OutboxEvent. A crash before
+      // commit leaves only an expiring pending lease; a crash after commit
+      // leaves a complete replay record with the original Event ID.
+      if (options.idempotencyRecordId) {
+        await markIdempotencyComplete(
+          options.idempotencyRecordId,
+          event._id,
+          responseBody,
+          session
+        );
+      }
     });
   } catch (err) {
-    // Transaction rolled back — no Event and no OutboxEvent in DB.
-    // If we claimed an idempotency slot, release it so the client can retry.
-    if (options.idempotencyRecordId) {
-      await deleteIdempotencyRecord(options.idempotencyRecordId).catch(() => {});
-    }
+    // Do not delete a reservation here. `withTransaction` can surface an
+    // uncertain commit outcome; deleting could open a duplicate-Event window.
+    // The pending lease makes a definitely uncommitted reservation recoverable.
     throw new AppError(
       "Failed to create event. Please retry.",
       503
     );
   } finally {
     await session.endSession();
-  }
-
-  // ── 4. Build response ─────────────────────────────────────────────────────────
-  const responseBody = {
-    success: true,
-    message: "Event accepted",
-    data: {
-      eventId: createdEvent._id,
-      status: createdEvent.status,
-      createdAt: createdEvent.createdAt,
-      outboxPending: true,
-    },
-  };
-
-  // ── 5. Mark idempotency record complete (best-effort) ─────────────────────────
-  // If this fails, the event was already created safely. The idempotency record
-  // remains "pending" and will eventually expire via TTL. The client receives
-  // a 503, which is correct — they can retry, and the retry will get a 409
-  // (in-flight) or, after TTL, create a new event.
-  if (options.idempotencyRecordId) {
-    await markIdempotencyComplete(
-      options.idempotencyRecordId,
-      createdEvent._id,
-      responseBody
-    ).catch(() => {
-      // Log but don't fail the request — event was created successfully
-    });
   }
 
   return responseBody.data;

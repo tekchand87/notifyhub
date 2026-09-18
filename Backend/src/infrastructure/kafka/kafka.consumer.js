@@ -2,7 +2,13 @@ import {kafka} from "./kafka.js"
 import "dotenv/config"
 
 export const consumer = kafka.consumer({
-   groupId : process.env.KAFKA_GROUP_ID||"notifyhub-workers"
+   groupId : process.env.KAFKA_GROUP_ID||"notifyhub-workers",
+   // Small fetch batches reduce broker request overhead; maxWait bounds latency
+   // when notification traffic is sparse.
+   minBytes: Number(process.env.KAFKA_CONSUMER_MIN_BYTES) || 32_768,
+   maxBytes: Number(process.env.KAFKA_CONSUMER_MAX_BYTES) || 10_485_760,
+   maxBytesPerPartition: Number(process.env.KAFKA_CONSUMER_MAX_BYTES_PER_PARTITION) || 1_048_576,
+   maxWaitTimeInMs: Number(process.env.KAFKA_CONSUMER_MAX_WAIT_MS) || 50,
 });
 
 export const connectKafkaConsumer = async()=>{
@@ -26,3 +32,8 @@ export const disconnectedKafkaConsumer = async()=>{
    await consumer.disconnect();
    console.log("Kafka Worker Consumer DisConnected");
 }
+
+// Stop fetching new messages before worker shutdown waits for in-flight handlers.
+export const stopKafkaConsumer = async () => {
+   await consumer.stop();
+};

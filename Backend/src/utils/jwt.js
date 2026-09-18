@@ -6,11 +6,12 @@ export const generateAccessToken = (user) => {
     {
       userId: user._id.toString(),
       tenantId: user.tenantId.toString(),
-      role: user.role
+      role: user.role,
+      tokenVersion: user.tokenVersion ?? 0,
     },
     env.JWT_SECRET,
     {
-      expiresIn: env.JWT_EXPIRES_IN
+      expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || env.JWT_EXPIRES_IN || "15m"
     }
   );
 };

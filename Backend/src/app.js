@@ -11,13 +11,23 @@ import authRoutes from "./modules/auth/auth.routes.js"
 import tenantRoutes from "./modules/tenant/tenant.routes.js"
 import apiRoutes from "./modules/apiKey/apiKey.routes.js"
 import eventRoutes from "./modules/event/event.routes.js"
+import outboxRoutes from "./modules/event/outbox.routes.js"
 
 import {notFound} from "./middleware/notFound.middleware.js"
 import {errorHandler} from "./middleware/error.middleware.js"
 import { apiLimiter } from "./middleware/rateLimit.middleware.js"
 import { checkKafkaHealth } from "./infrastructure/kafka/kafka.health.js"
+import { checkRedisHealth } from "./infrastructure/redis/redis.client.js"
+import mongoose from "mongoose"
+import { requestContext } from "./middleware/requestContext.middleware.js"
+import { metricsSnapshot } from "./infrastructure/observability/metrics.js"
 
 const app = express();
+
+// Leave this false unless the deployment supplies the exact trusted reverse
+// proxy/CIDR list. With false, Express ignores client-supplied X-Forwarded-For.
+app.set("trust proxy", process.env.TRUST_PROXY || false);
+app.use(requestContext);
 
 // ─── Security headers (Bug #6) ────────────────────────────────────────────────
 // Helmet removes X-Powered-By and adds a suite of safe HTTP security headers.
@@ -33,7 +43,9 @@ app.use(
 // Restrict to explicitly configured origins.
 // Default (development): http://localhost:5173
 // Production: set CORS_ORIGINS=https://app.example.com (comma-separated)
-const rawOrigins = process.env.CORS_ORIGINS || "http://localhost:5173";
+// Accept both standard loopback hostnames in local development. Production must
+// still provide explicit origins through CORS_ORIGINS.
+const rawOrigins = process.env.CORS_ORIGINS || "http://localhost:5173,http://127.0.0.1:5173";
 const allowedOrigins = rawOrigins
   .split(",")
   .map((o) => o.trim())
@@ -116,6 +128,31 @@ app.get("/health/kafka", async (req, res) => {
   }
 });
 
+// Dependency readiness is separate from liveness: Redis may be optional when
+// rate limiting is disabled or explicitly configured to fail open.
+app.get("/health/redis", async (_req, res) => {
+  const result = await checkRedisHealth();
+  const httpStatus = result.status === "unhealthy" ? 503 : 200;
+  res.status(httpStatus).json({
+    success: result.status !== "unhealthy",
+    redis: result,
+  });
+});
+
+// Liveness means only that this process can answer HTTP requests.
+app.get("/live", (_req, res) => res.status(200).json({ success: true, status: "alive" }));
+// Readiness checks dependencies required to accept/commit event ingestion.
+app.get("/ready", async (_req, res) => {
+  const redis = await checkRedisHealth();
+  const mongoReady = mongoose.connection.readyState === 1;
+  const redisRequired = process.env.RATE_LIMIT_ENABLED !== "false" && process.env.RATE_LIMIT_FAILURE_MODE === "fail-closed";
+  const ready = mongoReady && (!redisRequired || redis.status === "healthy");
+  res.status(ready ? 200 : 503).json({ success: ready, dependencies: { mongo: mongoReady ? "healthy" : "unhealthy", redis: redis.status } });
+});
+// This is intentionally unauthenticated only for local/internal scraping. Put it
+// behind network policy in production; it exposes aggregate counts, not secrets.
+app.get("/metrics", (_req, res) => res.status(200).json(metricsSnapshot()));
+
 // ─── Global API rate limiter (applied before all /api routes) ─────────────────
 // Note: health endpoints above are NOT affected by this limiter.
 app.use(apiLimiter);
@@ -124,6 +161,7 @@ app.use("/api/v1/auth",authRoutes);
 app.use("/api/v1/tenant",tenantRoutes);
 app.use("/api/v1/api-keys",apiRoutes);
 app.use("/api/v1/events",eventRoutes);
+app.use("/api/v1/outbox",outboxRoutes);
 
 // ─── Serve built frontend (production / when dist exists) ─────────────────────
 // In development, the Vite dev server (port 5173) serves the frontend and

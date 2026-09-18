@@ -119,8 +119,8 @@ export const logDeliveryRecorded = ({ eventId, channel, status, attemptNumber })
 /**
  * Logged on worker startup.
  */
-export const logWorkerStarted = () => {
-  logInfo("NotifyHub Worker is running");
+export const logWorkerStarted = (meta = {}) => {
+  logInfo("NotifyHub Worker is running", meta);
 };
 
 /**

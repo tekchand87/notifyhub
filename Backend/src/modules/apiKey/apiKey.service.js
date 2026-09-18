@@ -32,10 +32,14 @@ export const createApiKey = async(tenantId,input)=>{
 };
 
 export const listApiKeys = async(tenantId)=>{
-  return ApiKey.find({tenantId})
+  const keys = await ApiKey.find({tenantId})
   .select("name keyPrefix scopes isActive expiresAt lastUsedAt createdAt")
   .sort({createdAt : -1})
-  .lean()
+  .lean();
+
+  // Normalize _id → id so the frontend receives a consistent string id field,
+  // matching what createApiKey already returns.
+  return keys.map(({ _id, ...rest }) => ({ id: String(_id), ...rest }));
 };
 
 export const getApiKey = async(tenantId,apiKeyId)=>{

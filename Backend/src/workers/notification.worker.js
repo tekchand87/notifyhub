@@ -8,18 +8,21 @@ import crypto from "crypto";
 import mongoose from "mongoose";
 
 import {
+  consumer,
   connectKafkaConsumer,
   subscribeKafkaConsumer,
+  stopKafkaConsumer,
   disconnectedKafkaConsumer,
 } from "../infrastructure/kafka/kafka.consumer.js";
 
-import { ensureDLQTopic } from "../infrastructure/kafka/kafka.admin.js";
+import { validateKafkaTopics } from "../infrastructure/kafka/kafka.admin.js";
 import {
   connectDLQProducer,
   disconnectDLQProducer,
 } from "../infrastructure/kafka/dlq.publisher.js";
 
-import { startWorker } from "../modules/worker/worker.service.js";
+import { startWorker, stopWorker } from "../modules/worker/worker.service.js";
+import { getWorkerConcurrency, mapWithConcurrency } from "../modules/worker/worker.concurrency.js";
 import {
   getRetryReadyEvents,
   markEventProcessing,
@@ -59,8 +62,10 @@ const getLeaseRecoveryIntervalMs = () =>
   Number(process.env.LEASE_RECOVERY_INTERVAL_MS) || 60_000; // 60s
 
 let shuttingDown = false;
+let shutdownTimer = null;
 let retryPollerTimer = null;
 let leaseRecoveryTimer = null;
+let activeRetryPoll = null;
 
 // ─── MongoDB ──────────────────────────────────────────────────────────────────
 
@@ -110,6 +115,7 @@ const processRetryEvent = async (dbEvent) => {
 
     await Delivery.create({
       eventId,
+      tenantId,
       attemptNumber: currentAttempts + 1,
       channel: dbEvent.channel,
       status: "success",
@@ -130,6 +136,7 @@ const processRetryEvent = async (dbEvent) => {
   } catch (error) {
     await Delivery.create({
       eventId,
+      tenantId,
       attemptNumber: currentAttempts + 1,
       channel: dbEvent.channel,
       status: "failed",
@@ -157,20 +164,24 @@ const processRetryEvent = async (dbEvent) => {
 const runRetryPoller = async () => {
   if (shuttingDown) return;
 
-  try {
-    const dueEvents = await getRetryReadyEvents();
-    logRetryPollerPickup({ count: dueEvents.length });
+  const poll = (async () => {
+    try {
+      const dueEvents = await getRetryReadyEvents();
+      logRetryPollerPickup({ count: dueEvents.length });
 
-    // Process sequentially to avoid overwhelming DB/external services
-    for (const event of dueEvents) {
-      if (shuttingDown) break;
-      await processRetryEvent(event).catch((err) => {
-        logRetryPollerError(err);
+      await mapWithConcurrency(dueEvents, getWorkerConcurrency(), async (event) => {
+        if (shuttingDown) return;
+        await processRetryEvent(event).catch((err) => {
+          logRetryPollerError(err);
+        });
       });
+    } catch (err) {
+      logRetryPollerError(err);
     }
-  } catch (err) {
-    logRetryPollerError(err);
-  }
+  })();
+  activeRetryPoll = poll;
+  await poll;
+  if (activeRetryPoll === poll) activeRetryPoll = null;
 
   if (!shuttingDown) {
     retryPollerTimer = setTimeout(runRetryPoller, retryConfig.pollerIntervalMs);
@@ -198,9 +209,10 @@ const runLeaseRecoveryPoller = async () => {
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 
-const shutdown = async (signal) => {
+const shutdown = async (signal, exitCode = 0) => {
   if (shuttingDown) return;
   shuttingDown = true;
+  shutdownTimer = setTimeout(() => process.exit(1), Number(process.env.WORKER_SHUTDOWN_TIMEOUT_MS) || 30_000);
 
   logShutdownStarted(signal);
 
@@ -214,11 +226,16 @@ const shutdown = async (signal) => {
   }
 
   try {
+    // Stop fetching before waiting for handlers so no new delivery begins.
+    await stopKafkaConsumer();
+    await stopWorker();
+    if (activeRetryPoll) await activeRetryPoll.catch(() => {});
     await disconnectedKafkaConsumer();
     await disconnectDLQProducer();
     await mongoose.disconnect();
     logShutdownComplete();
-    process.exit(0);
+    clearTimeout(shutdownTimer);
+    process.exit(exitCode);
   } catch (error) {
     logError("Worker shutdown failed", error);
     process.exit(1);
@@ -228,6 +245,25 @@ const shutdown = async (signal) => {
 process.on("SIGINT",  () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
+// Keep the worker alive even if a rogue unhandled rejection slips through.
+process.on("unhandledRejection", (reason) => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  logError("Worker fatal unhandled rejection", error);
+  void shutdown("unhandledRejection", 1);
+});
+
+process.on("uncaughtException", (err) => {
+  logError("Worker fatal uncaught exception", err);
+  void shutdown("uncaughtException", 1);
+});
+
+// ─── Permanent event-loop keepalive ───────────────────────────────────────────
+// The googleapis HTTPS client closes its keep-alive socket after each request,
+// which can drain the event loop if Kafka has no pending heartbeats at that
+// exact moment. This interval guarantees the process stays alive indefinitely
+// regardless of third-party library teardown behaviour.
+const _keepAlive = setInterval(() => {}, 2_147_483_647); // ~24 days
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 const boot = async () => {
@@ -235,8 +271,8 @@ const boot = async () => {
 
   await connectMongo();
 
-  // Ensure Kafka topics exist (main + DLQ)
-  await ensureDLQTopic();
+  // Validate provisioned Kafka topics; provisioning is deployment-owned.
+  await validateKafkaTopics();
 
   // Connect consumer and DLQ producer
   await connectKafkaConsumer();
@@ -246,12 +282,30 @@ const boot = async () => {
   logInfo("DLQ producer connected");
 
   // Start Kafka consumer loop (pass WORKER_ID for lease tracking)
+  // Start Kafka consumer loop (pass WORKER_ID for lease tracking)
   await startWorker(WORKER_ID);
+
+  // Auto-restart consumer if KafkaJS crashes internally (e.g. coordinator
+  // eviction after a long eachMessage handler, heartbeat timeout, etc.)
+  consumer.on(consumer.events.CRASH, async ({ payload }) => {
+    logError("Consumer crashed — attempting auto-restart", payload.error);
+    try {
+      await connectKafkaConsumer();
+      await subscribeKafkaConsumer();
+      await startWorker(WORKER_ID);
+      logInfo("Consumer restarted successfully after crash");
+    } catch (restartErr) {
+      logError("Consumer restart failed", restartErr);
+    }
+  });
 
 
   // Start retry poller (every RETRY_POLLER_INTERVAL_MS, default 5s)
   retryPollerTimer = setTimeout(runRetryPoller, retryConfig.pollerIntervalMs);
-  logInfo("Retry poller started", { intervalMs: retryConfig.pollerIntervalMs });
+  logInfo("Retry poller started", {
+    intervalMs: retryConfig.pollerIntervalMs,
+    concurrency: getWorkerConcurrency(),
+  });
 
   // Start stale-lease recovery poller (every LEASE_RECOVERY_INTERVAL_MS, default 60s)
   // Run immediately on boot to recover any events left processing from a previous crash

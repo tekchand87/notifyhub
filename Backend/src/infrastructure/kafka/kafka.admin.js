@@ -3,6 +3,30 @@ import "dotenv/config"
 
 const admin = kafka.admin()
 
+const requiredTopics = () => [
+  { name: process.env.KAFKA_TOPIC || "notifyhub.events", partitions: Number(process.env.KAFKA_TOPIC_PARTITIONS) || 6 },
+  { name: process.env.KAFKA_DLQ_TOPIC || "notifyhub.events.dlq", partitions: Number(process.env.KAFKA_DLQ_TOPIC_PARTITIONS) || 1 },
+];
+
+// Validation only. Production provisioning belongs to deployment/infrastructure;
+// the application must never silently change topic topology at runtime.
+export const validateKafkaTopics = async () => {
+  const validationAdmin = kafka.admin();
+  await validationAdmin.connect();
+  try {
+    const metadata = await validationAdmin.fetchTopicMetadata({ topics: requiredTopics().map((topic) => topic.name) });
+    const byName = new Map(metadata.topics.map((topic) => [topic.name, topic]));
+    for (const expected of requiredTopics()) {
+      const actual = byName.get(expected.name);
+      if (!actual) throw new Error(`Required Kafka topic is missing: ${expected.name}`);
+      if (actual.partitions.length < expected.partitions) {
+        throw new Error(`Kafka topic ${expected.name} has ${actual.partitions.length} partitions; expected at least ${expected.partitions}`);
+      }
+    }
+  } finally { await validationAdmin.disconnect(); }
+};
+
+// Deprecated compatibility export: validates; it does not create topics.
 export const ensureKafkaTopic = async()=>{
    await admin.connect();
 
@@ -13,21 +37,7 @@ export const ensureKafkaTopic = async()=>{
          throw new Error("KAFKA_TOPIC is not configured");
       }
 
-      const topics = await admin.listTopics();
-
-      if(!topics.includes(topic)){
-         await admin.createTopics({
-            topics : [{
-               topic ,
-               numPartitions : 1,
-               replicationFactor : 1
-            }]
-         });
-         console.log(`KAFKA topic "${topic}" created`);
-      }
-      else{
-         console.log(`Kafka topic "${topic}" already exists`);
-      }
+      await validateKafkaTopics();
    }
    finally{
       await admin.disconnect();
@@ -38,27 +48,4 @@ export const ensureKafkaTopic = async()=>{
  * Ensures the DLQ topic exists, creating it if necessary.
  * Called during worker startup alongside ensureKafkaTopic.
  */
-export const ensureDLQTopic = async () => {
-   const dlqTopic = process.env.KAFKA_DLQ_TOPIC || "notifyhub.events.dlq";
-   const dlqAdmin = kafka.admin();
-   await dlqAdmin.connect();
-
-   try {
-      const topics = await dlqAdmin.listTopics();
-
-      if (!topics.includes(dlqTopic)) {
-         await dlqAdmin.createTopics({
-            topics: [{
-               topic: dlqTopic,
-               numPartitions: 1,
-               replicationFactor: 1,
-            }],
-         });
-         console.log(`Kafka DLQ topic "${dlqTopic}" created`);
-      } else {
-         console.log(`Kafka DLQ topic "${dlqTopic}" already exists`);
-      }
-   } finally {
-      await dlqAdmin.disconnect();
-   }
-};
+export const ensureDLQTopic = validateKafkaTopics;
