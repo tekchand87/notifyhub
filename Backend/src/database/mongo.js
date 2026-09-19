@@ -18,3 +18,9 @@ export const connectMongoDB = async() =>{
     process.exit(1);
   }
 }
+
+export const disconnectMongoDB = async () => {
+  if (mongoose.connection.readyState === 0) return;
+  await mongoose.disconnect();
+  console.log("MongoDB Disconnected");
+};

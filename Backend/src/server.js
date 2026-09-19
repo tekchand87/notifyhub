@@ -7,7 +7,7 @@
 // providing reliable at-least-once Kafka delivery without blocking API requests.
 
 import app from "./app.js";
-import { connectMongoDB } from "./database/mongo.js";
+import { connectMongoDB, disconnectMongoDB } from "./database/mongo.js";
 import { env } from "./config/env.js";
 import {
   connectKafkaProducer,
@@ -53,17 +53,38 @@ const startServer = async () => {
   });
 
   // 5. Graceful shutdown
+  let shuttingDown = false;
   const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`\n[${signal}] Shutting down API server...`);
-    await stopOutboxPublisher();
-    await disconnectKafkaProducer().catch(() => {});
-    await disconnectRedis().catch(() => {});
-    server.close(() => {
-      console.log("HTTP server closed");
-      process.exit(0);
+
+    // Stop accepting new HTTP work before draining background publishers and
+    // closing their shared database/broker connections.
+    const closeHttpServer = new Promise((resolve) => {
+      server.close(() => {
+        console.log("HTTP server closed");
+        resolve();
+      });
     });
-    // Force exit after 10 seconds
-    setTimeout(() => process.exit(1), 10_000);
+
+    // Force exit if a long-lived request or dependency close prevents a clean
+    // shutdown. The normal path below clears this timer first.
+    const forceExitTimer = setTimeout(() => process.exit(1), 10_000);
+
+    try {
+      await closeHttpServer;
+      await stopOutboxPublisher();
+      await disconnectKafkaProducer().catch(() => {});
+      await disconnectRedis().catch(() => {});
+      await disconnectMongoDB().catch(() => {});
+      clearTimeout(forceExitTimer);
+      process.exit(0);
+    } catch (error) {
+      clearTimeout(forceExitTimer);
+      console.error("API shutdown failed:", error.message);
+      process.exit(1);
+    }
   };
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));
