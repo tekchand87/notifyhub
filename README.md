@@ -1,6 +1,6 @@
 # NotifyHub
 
-A multi-tenant, event-driven notification and webhook delivery platform built on Node.js, Kafka, and MongoDB.
+A multi-tenant, event-driven notification and webhook delivery platform built on Node.js, Kafka/SQS, and MongoDB.
 
 ## Architecture
 
@@ -10,9 +10,12 @@ graph TD
     Dashboard["Dashboard (React)"] -->|JWT| API
 
     API -->|"Save event (queued)"| MongoDB[(MongoDB)]
-    API -->|Publish message| Kafka[("Kafka\nnotifyhub.events")]
+    API -->|Transactional outbox| Outbox[(MongoDB OutboxEvent)]
+    Outbox -->|EVENT_BROKER=kafka| Kafka[("Kafka\nnotifyhub.events")]
+    Outbox -->|EVENT_BROKER=sqs| SQS["Amazon SQS\nEvents Queue"]
 
     Kafka -->|eachMessage| Worker["Notification Worker"]
+    SQS -->|long polling| Worker
     Worker -->|"Mark processing (atomic)"| MongoDB
 
     Worker --> Dispatcher{Channel?}
@@ -28,11 +31,40 @@ graph TD
     RetryEngine -->|retryable + under limit| RetryWait["Mark retry_wait\n(nextRetryAt persisted in DB)"]
     RetryWait -->|"Poller (every 5s)"| Worker
 
-    RetryEngine -->|"max attempts exceeded"| DLQ["Mark dlq\n+ Publish to Kafka DLQ"]
+    RetryEngine -->|"max attempts exceeded"| DLQ["Mark dlq\n+ application-level DLQ record"]
     RetryEngine -->|non-retryable| Failed["Mark failed"]
 
-    DLQ --> KafkaDLQ[("Kafka\nnotifyhub.events.dlq")]
+    DLQ --> KafkaDLQ[("Kafka\nnotifyhub.events.dlq\n(Kafka mode)")]
+    SQS -.-> SQSRedrive["SQS redrive policy\n(queue-level failures)"]
 ```
+
+### Event broker modes
+
+Local Docker development uses the existing Kafka path:
+
+```text
+API → MongoDB Event + OutboxEvent → Kafka → Worker
+```
+
+AWS/ECS can select SQS without changing the transactional outbox or delivery
+state machine:
+
+```text
+API → MongoDB Event + OutboxEvent → SQS → Worker
+```
+
+Set `EVENT_BROKER=kafka` (the default) locally. For AWS, set
+`EVENT_BROKER=sqs`, `AWS_REGION`, and `SQS_EVENTS_QUEUE_URL`. The SQS adapter
+uses the ECS task IAM role through the AWS SDK default credential provider
+chain; credentials are never configured in application environment files.
+
+SQS long polling leaves a failed message undeleted so its visibility timeout
+expires. The queue redrive policy then moves it to the configured SQS DLQ.
+NotifyHub's existing MongoDB delivery retry state machine remains separate and
+continues to retry individual email/webhook deliveries. In Kafka mode, the
+existing application-level Kafka DLQ topic is preserved. If per-tenant ordering
+is required in SQS mode, use a FIFO queue URL ending in `.fifo`; the adapter
+uses `tenantId` as `MessageGroupId` and `eventId` as the deduplication ID.
 
 ## Features
 
@@ -91,6 +123,10 @@ cd Frontend && npm run dev
 
 See [`Backend/.env.example`](Backend/.env.example) for the full reference.
 
+For the temporary single-EC2 Kafka demo deployment, see
+[`docs/kafka-ec2.md`](docs/kafka-ec2.md) and
+[`docker-compose.kafka-ec2.yml`](docker-compose.kafka-ec2.yml).
+
 ### Key variables for new features
 
 | Variable | Default | Description |
@@ -100,6 +136,11 @@ See [`Backend/.env.example`](Backend/.env.example) for the full reference.
 | `RETRY_MAX_DELAY_MS` | `300000` | Maximum retry delay (5 min) |
 | `RETRY_POLLER_INTERVAL_MS` | `5000` | How often retry poller runs |
 | `KAFKA_DLQ_TOPIC` | `notifyhub.events.dlq` | DLQ Kafka topic name |
+| `EVENT_BROKER` | `kafka` | Event transport: `kafka` or `sqs` |
+| `SQS_EVENTS_QUEUE_URL` | — | AWS SQS event queue (required in SQS mode) |
+| `SQS_WAIT_TIME_SECONDS` | `20` | SQS long-poll duration |
+| `SQS_VISIBILITY_TIMEOUT_SECONDS` | `60` | Visibility timeout for worker processing |
+| `SQS_MAX_MESSAGES` | `10` | Maximum messages received per SQS poll |
 | `WEBHOOK_TIMEOUT_MS` | `10000` | Webhook HTTP request timeout |
 | `WEBHOOK_ALLOW_LOCALHOST` | `false` | Allow localhost webhook targets (dev only) |
 | `REDIS_URL` | `redis://localhost:6379` | Shared Redis endpoint for rate limiting; required in production |
@@ -234,6 +275,11 @@ Rate-limited requests return `429` with `Retry-After`, `RateLimit-Remaining`, an
 ```
 
 ## Kafka Health Check
+
+`/health/kafka` remains available for compatibility. In `EVENT_BROKER=kafka`
+it performs the existing live Kafka probe. In `EVENT_BROKER=sqs`, it returns a
+successful `not_configured` Kafka status with `broker: "sqs"`; SQS mode does not
+require Kafka connectivity.
 
 ## Kafka topic contract
 

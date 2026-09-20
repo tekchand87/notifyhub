@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import {env} from "../config/env.js"
+import { redactMongoError } from "../config/mongo-uri.js";
 
 export const connectMongoDB = async() =>{
   try{
@@ -14,7 +15,7 @@ export const connectMongoDB = async() =>{
     });
     console.log("MongoDB Connected ");
   }catch(error){
-    console.error("MongoDB connection  failed :",error.message);
+    console.error("MongoDB connection failed:", redactMongoError(error));
     process.exit(1);
   }
 }

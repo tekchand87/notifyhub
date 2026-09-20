@@ -3,8 +3,7 @@
 //   parse → mark processing → dispatch → record delivery → mark delivered/failed/retry_wait/dlq
 // Stays channel-agnostic: no SMTP, no HTTP webhook code here.
 
-import { consumer } from "../../infrastructure/kafka/kafka.consumer.js";
-import { parseKafkaEvent } from "./worker.parser.js";
+import { parseKafkaEvent, parseSqsEvent } from "./worker.parser.js";
 import { dispatchNotification } from "./worker.dispatcher.js";
 import {
   markEventProcessing,
@@ -48,10 +47,7 @@ const requireDurableTransition = (result, description) => {
   return result;
 };
 
-export const processKafkaMessage = async ({ topic, partition, message, workerId }) => {
-
-  // 1. Parse and validate the raw Kafka message
-  const event = parseKafkaEvent(message);
+const processEventMessage = async ({ event, topic, partition, message, workerId }) => {
 
   logEventReceived({
     eventId: event.eventId,
@@ -64,7 +60,7 @@ export const processKafkaMessage = async ({ topic, partition, message, workerId 
   });
 
 
-  // 2. Atomically transition: queued|retry_wait → processing (with worker lease)
+  // 1. Atomically transition: queued|retry_wait → processing (with worker lease)
   //    findOneAndUpdate with status guard ensures only one worker
   //    claims the event (guards against duplicate Kafka delivery)
   const dbEvent = await markEventProcessing(event.eventId, workerId);
@@ -97,11 +93,11 @@ export const processKafkaMessage = async ({ topic, partition, message, workerId 
 
   try {
 
-    // 3. Route to the correct channel handler (email, webhook, …)
+    // 2. Route to the correct channel handler (email, webhook, …)
     const result = await dispatchNotification(enrichedEvent);
 
 
-    // 4. Persist a successful Delivery record for audit/traceability
+    // 3. Persist a successful Delivery record for audit/traceability
     await Delivery.create({
       eventId: event.eventId,
       tenantId: event.tenantId,
@@ -121,7 +117,7 @@ export const processKafkaMessage = async ({ topic, partition, message, workerId 
     });
 
 
-    // 5. Transition: processing → delivered
+    // 4. Transition: processing → delivered
     requireDurableTransition(
       await markEventDelivered(event.eventId),
       "processing -> delivered"
@@ -131,7 +127,7 @@ export const processKafkaMessage = async ({ topic, partition, message, workerId 
 
   } catch (error) {
 
-    // 6. Persist a failed Delivery record for audit trail
+    // 5. Persist a failed Delivery record for audit trail
     await Delivery.create({
       eventId: event.eventId,
       tenantId: event.tenantId,
@@ -150,11 +146,11 @@ export const processKafkaMessage = async ({ topic, partition, message, workerId 
     const newAttempts = currentAttempts + 1;
 
     if (retryable && newAttempts < maxAttempts) {
-      // 7a. Retryable and still under limit → schedule retry
+      // 6a. Retryable and still under limit → schedule retry
       await scheduleRetry(event.eventId, event.tenantId, newAttempts, error);
 
     } else if (newAttempts >= maxAttempts) {
-      // 7b. Max attempts reached → move to DLQ regardless of retryability
+      // 6b. Max attempts reached → move to DLQ regardless of retryability
       await moveToDLQ(
         event.eventId,
         event.tenantId,
@@ -165,7 +161,7 @@ export const processKafkaMessage = async ({ topic, partition, message, workerId 
       );
 
     } else {
-      // 7c. Non-retryable failure → permanent fail
+      // 6c. Non-retryable failure → permanent fail
       requireDurableTransition(
         await markEventFailed(event.eventId, error.message),
         "processing -> failed"
@@ -174,73 +170,119 @@ export const processKafkaMessage = async ({ topic, partition, message, workerId 
   }
 };
 
+export const processKafkaMessage = async ({ topic, partition, message, workerId }) => {
+  const event = parseKafkaEvent(message);
+  return processEventMessage({ event, topic, partition, message, workerId });
+};
 
-export const startWorker = async (workerId) => {
+export const processSqsMessage = async ({ event, message, workerId }) => {
+  const parsedEvent = event || parseSqsEvent(message);
+  return processEventMessage({
+    event: parsedEvent,
+    topic: process.env.KAFKA_TOPIC || "notifyhub.events",
+    partition: null,
+    message,
+    workerId,
+  });
+};
+
+
+const handleKafkaMessage = async ({ topic, partition, message, workerId }) => {
+  if (!acceptingMessages) return;
+  const task = processKafkaMessage({ topic, partition, message, workerId });
+  inFlightMessages.add(task);
+  try {
+    await task;
+  } catch (err) {
+    // A parsed Event has an existing state machine. Any error after parsing
+    // must propagate until that state machine has a durable outcome.
+    if (!err?.isKafkaPoisonMessage) {
+      logError("Kafka processing failure is not durably handled", {
+        ...kafkaContext({ topic, partition, message, workerId }),
+        error: err?.message,
+        errorType: err?.name,
+        retryable: true,
+      });
+      throw err;
+    }
+
+    // Parser failures have no Event state to transition. Persist their
+    // idempotent Mongo failure record first; only then may KafkaJS advance.
+    let poisonRecord = null;
+    try {
+      poisonRecord = await persistPoisonMessage({ topic, partition, message, error: err });
+    } catch (poisonError) {
+      logError("Kafka processing failure could not be durably recorded", {
+        ...kafkaContext({ topic, partition, message, workerId }),
+        error: poisonError.message,
+        errorType: poisonError.name,
+        originalError: err?.message,
+        retryable: true,
+      });
+      throw poisonError;
+    }
+
+    if (!poisonRecord) throw err;
+
+    logError("Kafka poison message durably recorded", {
+      ...kafkaContext({
+        topic,
+        partition,
+        message,
+        workerId,
+        event: { eventId: poisonRecord.eventId, tenantId: poisonRecord.tenantId },
+      }),
+      error: err.message,
+      errorType: err.name,
+      retryable: false,
+      poisonMessageId: String(poisonRecord._id),
+    });
+  } finally {
+    inFlightMessages.delete(task);
+  }
+};
+
+const handleSqsMessage = async ({ event, message, workerId }) => {
+  if (!acceptingMessages) return;
+  const task = processSqsMessage({ event, message, workerId });
+  inFlightMessages.add(task);
+  try {
+    // SQS must see failures so the adapter leaves the message undeleted.
+    await task;
+  } catch (error) {
+    logError("SQS processing failure was not durably handled", {
+      ...kafkaContext({ message, workerId, event }),
+      error: error.message,
+      errorType: error.name,
+      retryable: true,
+    });
+    throw error;
+  } finally {
+    inFlightMessages.delete(task);
+  }
+};
+
+export const startWorker = async (workerId, broker = null) => {
   acceptingMessages = true;
   const concurrency = getWorkerConcurrency();
 
+  if (broker) {
+    await broker.startConsumer((context) => context.broker === "sqs"
+      ? handleSqsMessage({ ...context, workerId })
+      : handleKafkaMessage({ ...context, workerId }));
+    logWorkerStarted({ concurrency, broker: broker.mode });
+    return;
+  }
+
+  // Legacy Kafka entry point retained for existing integration tests and
+  // callers that explicitly connect/subscribe the Kafka consumer themselves.
+  const { consumer } = await import("../../infrastructure/kafka/kafka.consumer.js");
   await consumer.run({
-    // KafkaJS runs this many assigned partitions concurrently while retaining
-    // in-order processing and offset commits within each partition.
     partitionsConsumedConcurrently: concurrency,
-    eachMessage: async ({ topic, partition, message }) => {
-      if (!acceptingMessages) return;
-      const task = processKafkaMessage({ topic, partition, message, workerId });
-      inFlightMessages.add(task);
-      try {
-        await task;
-      } catch (err) {
-        // A parsed Event has an existing state machine. Any error after parsing
-        // must propagate until that state machine has a durable outcome.
-        if (!err?.isKafkaPoisonMessage) {
-          logError("Kafka processing failure is not durably handled", {
-            ...kafkaContext({ topic, partition, message, workerId }),
-            error: err?.message,
-            errorType: err?.name,
-            retryable: true,
-          });
-          throw err;
-        }
-
-        // Parser failures have no Event state to transition. Persist their
-        // idempotent Mongo failure record first; only then may this handler
-        // resolve and allow KafkaJS to advance the offset.
-        let poisonRecord = null;
-        try {
-          poisonRecord = await persistPoisonMessage({ topic, partition, message, error: err });
-        } catch (poisonError) {
-          logError("Kafka processing failure could not be durably recorded", {
-            ...kafkaContext({ topic, partition, message, workerId }),
-            error: poisonError.message,
-            errorType: poisonError.name,
-            originalError: err?.message,
-            retryable: true,
-          });
-          throw poisonError;
-        }
-
-        if (!poisonRecord) throw err;
-
-        logError("Kafka poison message durably recorded", {
-          ...kafkaContext({
-            topic,
-            partition,
-            message,
-            workerId,
-            event: { eventId: poisonRecord.eventId, tenantId: poisonRecord.tenantId },
-          }),
-          error: err.message,
-          errorType: err.name,
-          retryable: false,
-          poisonMessageId: String(poisonRecord._id),
-        });
-      } finally {
-        inFlightMessages.delete(task);
-      }
-    },
+    eachMessage: (context) => handleKafkaMessage({ ...context, workerId }),
   });
 
-  logWorkerStarted({ concurrency });
+  logWorkerStarted({ concurrency, broker: "kafka" });
 };
 
 /** Wait for the bounded set of already-started handlers to settle. */

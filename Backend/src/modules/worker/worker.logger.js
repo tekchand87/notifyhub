@@ -164,10 +164,12 @@ export const logDLQTransition = ({ eventId, tenantId, deliveryId, attempts, reas
 };
 
 /**
- * Logged when a DLQ Kafka publish fails (non-fatal — DLQ failure must not crash the worker).
+ * Logged when an application-level DLQ publication fails (non-fatal — the
+ * durable MongoDB DLQ state must not be lost). In SQS mode, queue-level DLQ
+ * delivery is owned by the configured redrive policy.
  */
 export const logDLQPublishFailed = ({ eventId, tenantId, error }) => {
-  logError("DLQ Kafka publish failed (DB status is still dlq)", {
+  logError("Application-level DLQ publish failed (DB status is still dlq)", {
     eventId,
     tenantId,
     error: error instanceof Error ? error.message : String(error),

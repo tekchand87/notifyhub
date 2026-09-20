@@ -16,7 +16,7 @@ import outboxRoutes from "./modules/event/outbox.routes.js"
 import {notFound} from "./middleware/notFound.middleware.js"
 import {errorHandler} from "./middleware/error.middleware.js"
 import { apiLimiter } from "./middleware/rateLimit.middleware.js"
-import { checkKafkaHealth } from "./infrastructure/kafka/kafka.health.js"
+import { getEventBrokerMode } from "./infrastructure/event-broker/event-broker.js"
 import { checkRedisHealth } from "./infrastructure/redis/redis.client.js"
 import mongoose from "mongoose"
 import { requestContext } from "./middleware/requestContext.middleware.js"
@@ -103,7 +103,21 @@ app.get("/health",(req,res)=>{
 
 // Real Kafka health check — performs a live broker probe (cached 5s)
 app.get("/health/kafka", async (req, res) => {
+  const brokerMode = getEventBrokerMode();
+  if (brokerMode === "sqs") {
+    return res.status(200).json({
+      success: true,
+      kafka: {
+        status: "not_configured",
+        broker: "sqs",
+        latencyMs: 0,
+        cached: false,
+      },
+    });
+  }
+
   try {
+    const { checkKafkaHealth } = await import("./infrastructure/kafka/kafka.health.js");
     const result = await checkKafkaHealth();
     const httpStatus = result.status === "healthy" ? 200 : 503;
     res.status(httpStatus).json({

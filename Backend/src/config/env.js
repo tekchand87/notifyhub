@@ -6,6 +6,8 @@
 // Never add raw secrets to this file; read them from process.env only.
 
 import dotenv from "dotenv"
+import { validateMongoUri } from "./mongo-uri.js";
+import { validateEventBrokerConfig } from "../infrastructure/event-broker/event-broker.js";
 
 dotenv.config();
 
@@ -20,16 +22,26 @@ for(const key of requiredEnv){
   }
 }
 
+let mongoUri;
+try {
+  mongoUri = validateMongoUri(process.env.MONGODB_URI);
+} catch (error) {
+  throw new Error(`Invalid MONGODB_URI: ${error.message}`);
+}
+
 if (process.env.NODE_ENV === "production" && process.env.RATE_LIMIT_ENABLED !== "false" && !process.env.REDIS_URL) {
   throw new Error("Missing required environment variable : REDIS_URL (production rate limiting)");
 }
 
+const eventBroker = validateEventBrokerConfig();
+
 export const env = {
   PORT         : process.env.PORT || 3000,
   NODE_ENV     : process.env.NODE_ENV || "development",
-  MONGODB_URI  : process.env.MONGODB_URI,
+  MONGODB_URI  : mongoUri,
   JWT_SECRET   : process.env.JWT_SECRET,
   JWT_EXPIRES_IN : process.env.JWT_EXPIRES_IN || "1d",
+  EVENT_BROKER  : eventBroker,
 
   // ── CORS ───────────────────────────────────────────────────────────────────
   // Comma-separated list of allowed origin URLs.

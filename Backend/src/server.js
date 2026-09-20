@@ -1,18 +1,16 @@
 // src/server.js
 // API server entry point.
-// Startup order: MongoDB → Kafka Producer → Outbox Publisher → HTTP server
+// Startup order: MongoDB → selected event broker → Outbox Publisher → HTTP server
 //
 // The Outbox Publisher is started here alongside the API server.
-// It polls OutboxEvent records and publishes them to Kafka asynchronously,
-// providing reliable at-least-once Kafka delivery without blocking API requests.
+// It polls OutboxEvent records and publishes them to the selected broker
+// asynchronously, providing reliable at-least-once delivery without blocking
+// API requests.
 
 import app from "./app.js";
 import { connectMongoDB, disconnectMongoDB } from "./database/mongo.js";
 import { env } from "./config/env.js";
-import {
-  connectKafkaProducer,
-  disconnectKafkaProducer,
-} from "./infrastructure/kafka/kafka.producer.js";
+import { createEventBroker } from "./infrastructure/event-broker/index.js";
 import {
   startOutboxPublisher,
   stopOutboxPublisher,
@@ -31,21 +29,21 @@ const startServer = async () => {
     () => console.warn("Redis rate-limit client unavailable at startup")
   );
 
-  // 2. Connect Kafka producer (required by outbox publisher)
+  // 2. Initialize the selected event broker publisher.
+  const eventBroker = await createEventBroker();
   try {
-    await connectKafkaProducer();
-    console.log("Kafka producer connected");
+    await eventBroker.initializePublisher?.();
   } catch (err) {
-    // Kafka may not be available at startup — that is acceptable.
-    // The outbox publisher will retry publishing when Kafka becomes available.
+    // Kafka may not be available at startup — that is acceptable. The outbox
+    // publisher will retry publishing when the selected broker is available.
     console.warn(
-      "Kafka producer connection failed at startup — outbox publisher will retry:",
+      `${eventBroker.mode} publisher connection failed at startup — outbox publisher will retry:`,
       err.message
     );
   }
 
-  // 3. Start the outbox publisher (polls OutboxEvent → Kafka)
-  startOutboxPublisher();
+  // 3. Start the outbox publisher (polls OutboxEvent → selected broker)
+  startOutboxPublisher(eventBroker);
 
   // 4. Start HTTP server
   const server = app.listen(env.PORT, () => {
@@ -75,7 +73,7 @@ const startServer = async () => {
     try {
       await closeHttpServer;
       await stopOutboxPublisher();
-      await disconnectKafkaProducer().catch(() => {});
+      await eventBroker.disconnectPublisher?.().catch(() => {});
       await disconnectRedis().catch(() => {});
       await disconnectMongoDB().catch(() => {});
       clearTimeout(forceExitTimer);

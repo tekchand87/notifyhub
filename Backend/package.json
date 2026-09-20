@@ -27,6 +27,7 @@
   },
   "homepage": "https://github.com/tekchand87/notifyhub#readme",
   "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1136.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
     "crypto": "^1.0.1",

@@ -1,11 +1,12 @@
-// Outbox Publisher — reliably moves committed MongoDB outbox records to Kafka.
-// A MongoDB claim remains the source of ownership. Kafka publication remains
-// at-least-once: a crash after Kafka acknowledges a batch but before MongoDB is
-// updated causes stale-claim recovery to publish that batch again.
+// Outbox Publisher — reliably moves committed MongoDB outbox records to the
+// configured event broker.
+// A MongoDB claim remains the source of ownership. Broker publication remains
+// at-least-once: a crash after the broker acknowledges a batch but before
+// MongoDB is updated causes stale-claim recovery to publish that batch again.
 
 import crypto from "crypto";
 import { OutboxEvent } from "../../modules/event/outbox.model.js";
-import { publishKafkaEvents } from "../kafka/kafka.producer.js";
+import { createEventBroker } from "../event-broker/index.js";
 import { logInfo, logWarn, logError } from "../../modules/worker/worker.logger.js";
 
 const positiveInteger = (value, fallback) => {
@@ -24,6 +25,7 @@ const config = {
 let pollerTimer = null;
 let running = false;
 let activePoll = null;
+let configuredBroker = null;
 
 const calculateOutboxBackoff = (attempt) => {
   const capped = Math.min(1_000 * Math.pow(2, attempt - 1), 60_000);
@@ -128,11 +130,15 @@ const markPublishFailed = (records, claimToken, error) => {
   );
 };
 
-const publishClaimedBatch = async (records, claimToken) => {
+const publishClaimedBatch = async (records, claimToken, broker) => {
   try {
-    await publishKafkaEvents(records.map(eventForKafka), { concurrency: config.concurrency });
+    await broker.publishEvent(records.map(eventForKafka), { concurrency: config.concurrency });
     const result = await markPublished(records, claimToken);
-    logInfo("Outbox: Kafka batch published", { claimed: records.length, published: result.modifiedCount });
+    logInfo("Outbox: batch published", {
+      broker: broker.mode,
+      claimed: records.length,
+      published: result.modifiedCount,
+    });
     return { published: result.modifiedCount, failed: 0 };
   } catch (error) {
     const result = await markPublishFailed(records, claimToken, error);
@@ -150,12 +156,13 @@ const publishClaimedBatch = async (records, claimToken) => {
 
 /** Run one complete outbox cycle. Exported for focused integration tests. */
 export const runOutboxPublisherCycle = async () => {
+  const broker = configuredBroker || await createEventBroker();
   await recoverStalePublishing();
   const { records, claimToken } = await claimBatch();
   if (records.length === 0) return { claimed: 0, published: 0, failed: 0 };
 
   logInfo("Outbox: claimed records for publishing", { count: records.length });
-  const result = await publishClaimedBatch(records, claimToken);
+  const result = await publishClaimedBatch(records, claimToken, broker);
   return { claimed: records.length, ...result };
 };
 
@@ -177,10 +184,12 @@ const runScheduledPoll = async () => {
   if (running) schedulePoll(result?.claimed === config.batchSize ? 0 : config.pollIntervalMs);
 };
 
-export const startOutboxPublisher = () => {
+export const startOutboxPublisher = (broker = null) => {
   if (running) return;
+  configuredBroker = broker;
   running = true;
   logInfo("Outbox publisher started", {
+    broker: broker?.mode || process.env.EVENT_BROKER || "kafka",
     pollIntervalMs: config.pollIntervalMs,
     batchSize: config.batchSize,
     concurrency: config.concurrency,
@@ -197,5 +206,6 @@ export const stopOutboxPublisher = async () => {
     pollerTimer = null;
   }
   if (activePoll) await activePoll.catch(() => {});
+  configuredBroker = null;
   logInfo("Outbox publisher stopped");
 };

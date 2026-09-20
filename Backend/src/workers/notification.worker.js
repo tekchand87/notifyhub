@@ -1,25 +1,14 @@
 // src/workers/notification.worker.js
 // Entry point for the Worker process.
-// Startup order: environment → MongoDB → Kafka consumer + DLQ → worker loop + pollers
+// Startup order: environment → MongoDB → selected event broker → worker loop + pollers
 
 import "dotenv/config";
 import os from "os";
 import crypto from "crypto";
 import mongoose from "mongoose";
+import { redactMongoError, redactMongoUri, validateMongoUri } from "../config/mongo-uri.js";
 
-import {
-  consumer,
-  connectKafkaConsumer,
-  subscribeKafkaConsumer,
-  stopKafkaConsumer,
-  disconnectedKafkaConsumer,
-} from "../infrastructure/kafka/kafka.consumer.js";
-
-import { validateKafkaTopics } from "../infrastructure/kafka/kafka.admin.js";
-import {
-  connectDLQProducer,
-  disconnectDLQProducer,
-} from "../infrastructure/kafka/dlq.publisher.js";
+import { createEventBroker } from "../infrastructure/event-broker/index.js";
 
 import { startWorker, stopWorker } from "../modules/worker/worker.service.js";
 import { getWorkerConcurrency, mapWithConcurrency } from "../modules/worker/worker.concurrency.js";
@@ -66,6 +55,7 @@ let shutdownTimer = null;
 let retryPollerTimer = null;
 let leaseRecoveryTimer = null;
 let activeRetryPoll = null;
+let eventBroker = null;
 
 // ─── MongoDB ──────────────────────────────────────────────────────────────────
 
@@ -73,8 +63,13 @@ const connectMongo = async () => {
   if (!mongoUri) {
     throw new Error("MONGODB_URI is not configured");
   }
-  await mongoose.connect(mongoUri);
-  logInfo("Worker MongoDB connected", { uri: mongoUri.replace(/\/\/.*@/, "//***@") });
+  try {
+    validateMongoUri(mongoUri);
+    await mongoose.connect(mongoUri);
+  } catch (error) {
+    throw new Error(`MongoDB connection failed: ${redactMongoError(error)}`);
+  }
+  logInfo("Worker MongoDB connected", { uri: redactMongoUri(mongoUri) });
 };
 
 // ─── Retry processing ─────────────────────────────────────────────────────────
@@ -227,11 +222,10 @@ const shutdown = async (signal, exitCode = 0) => {
 
   try {
     // Stop fetching before waiting for handlers so no new delivery begins.
-    await stopKafkaConsumer();
+    await eventBroker?.stopConsumer?.();
     await stopWorker();
     if (activeRetryPoll) await activeRetryPoll.catch(() => {});
-    await disconnectedKafkaConsumer();
-    await disconnectDLQProducer();
+    await eventBroker?.disconnectWorker?.();
     await mongoose.disconnect();
     logShutdownComplete();
     clearTimeout(shutdownTimer);
@@ -271,28 +265,19 @@ const boot = async () => {
 
   await connectMongo();
 
-  // Validate provisioned Kafka topics; provisioning is deployment-owned.
-  await validateKafkaTopics();
+  eventBroker = await createEventBroker();
+  await eventBroker.initializeWorker?.();
 
-  // Connect consumer and DLQ producer
-  await connectKafkaConsumer();
-  await subscribeKafkaConsumer();
-  await connectDLQProducer();
-
-  logInfo("DLQ producer connected");
-
-  // Start Kafka consumer loop (pass WORKER_ID for lease tracking)
-  // Start Kafka consumer loop (pass WORKER_ID for lease tracking)
-  await startWorker(WORKER_ID);
+  // Start the selected broker consumer loop (pass WORKER_ID for lease tracking).
+  await startWorker(WORKER_ID, eventBroker);
 
   // Auto-restart consumer if KafkaJS crashes internally (e.g. coordinator
   // eviction after a long eachMessage handler, heartbeat timeout, etc.)
-  consumer.on(consumer.events.CRASH, async ({ payload }) => {
+  eventBroker.onCrash?.(async ({ payload }) => {
     logError("Consumer crashed — attempting auto-restart", payload.error);
     try {
-      await connectKafkaConsumer();
-      await subscribeKafkaConsumer();
-      await startWorker(WORKER_ID);
+      await eventBroker.initializeWorker?.();
+      await startWorker(WORKER_ID, eventBroker);
       logInfo("Consumer restarted successfully after crash");
     } catch (restartErr) {
       logError("Consumer restart failed", restartErr);

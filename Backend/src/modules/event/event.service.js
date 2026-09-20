@@ -25,6 +25,7 @@ import { Event } from "./event.model.js";
 import { OutboxEvent } from "./outbox.model.js";
 import { AppError } from "../../utils/AppError.js";
 import { retryConfig } from "../../config/retry.config.js";
+import { getEventBrokerMode } from "../../infrastructure/event-broker/event-broker.js";
 import {
   markIdempotencyComplete,
 } from "./idempotency.service.js";
@@ -37,7 +38,12 @@ export const publishEvent = async (tenantId, input, options = {}) => {
     throw new AppError("Invalid tenant context", 401);
   }
 
-  const topic = process.env.KAFKA_TOPIC;
+  // Retain the topic as outbox routing metadata for Kafka. SQS mode ignores
+  // it and uses SQS_EVENTS_QUEUE_URL, but the transactional outbox schema keeps
+  // the same record shape in both broker modes.
+  const topic = process.env.KAFKA_TOPIC || (
+    getEventBrokerMode() === "sqs" ? "notifyhub.events" : null
+  );
   if (!topic) {
     throw new AppError("KAFKA_TOPIC is not configured", 500);
   }

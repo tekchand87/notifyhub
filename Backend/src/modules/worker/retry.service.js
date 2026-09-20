@@ -5,10 +5,12 @@
 //   - Exponential backoff with full jitter to prevent thundering herd
 //   - State is persisted in MongoDB (survives worker restart)
 //   - Retry scheduling is atomic: findOneAndUpdate with status guard
-//   - DLQ transition publishes to Kafka DLQ topic AND updates DB atomically
+//   - DLQ transition updates MongoDB durably. Kafka mode also best-effort
+//     publishes the existing Kafka DLQ record; SQS mode relies on queue redrive
+//     for queue failures and does not manually publish to an SQS DLQ.
 
 import { retryConfig } from "../../config/retry.config.js";
-import { publishToDLQ } from "../../infrastructure/kafka/dlq.publisher.js";
+import { createEventBroker } from "../../infrastructure/event-broker/index.js";
 import {
   markEventRetryWait,
   markEventDLQ,
@@ -150,8 +152,11 @@ export const moveToDLQ = async (eventId, tenantId, channel, attempts, lastError,
     throw new Error("Durable event transition did not apply: processing -> dlq");
   }
 
-  // 2. Publish to Kafka DLQ topic (best-effort)
-  const dlqResult = await publishToDLQ({
+  // 2. Publish the application-level DLQ record when the selected broker
+  // supports it. SQS queue-level failures are handled by visibility timeout
+  // and redrive policy, so the SQS adapter intentionally returns a no-op.
+  const broker = await createEventBroker();
+  const dlqResult = await broker.publishDlq?.({
     eventId,
     tenantId,
     channel,
@@ -159,7 +164,7 @@ export const moveToDLQ = async (eventId, tenantId, channel, attempts, lastError,
     reason,
     lastError: lastError?.message ?? null,
     originalTopic,
-  });
+  }) || { ok: false, error: "Selected broker has no application-level DLQ publisher" };
 
   if (!dlqResult.ok) {
     logDLQPublishFailed({ eventId, tenantId, error: new Error(dlqResult.error) });

@@ -15,4 +15,6 @@ dist
 build
 .cache
 .vite
+src/__tests__
+src/scripts
 Dockerfile*
