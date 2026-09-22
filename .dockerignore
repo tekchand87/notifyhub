@@ -1,0 +1,51 @@
+# Root-context builds must never send credentials or local machine state.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local authentication/key material and certificates.
+mongo-keyfile
+**/mongo-keyfile
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+.npmrc
+**/.npmrc
+
+# Source-control and dependency directories.
+.git
+.gitignore
+**/.git
+node_modules
+**/node_modules
+
+# Local build, test, cache, and runtime artifacts.
+coverage
+**/coverage
+dist
+**/dist
+build
+**/build
+.cache
+**/.cache
+.vite
+**/.vite
+*.log
+logs
+**/logs
+*.pid
+*.seed
+
+# Editor and operating-system artifacts.
+.DS_Store
+**/.DS_Store
+.idea
+**/.idea
+.vscode
+**/.vscode

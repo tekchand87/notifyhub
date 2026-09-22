@@ -91,7 +91,7 @@ uses `tenantId` as `MessageGroupId` and `eventId` as the deduplication ID.
 ### 1. Start infrastructure
 
 ```bash
-docker-compose up -d
+DOCKER_NODE_ENV=development docker compose up -d
 ```
 
 ### 2. Configure environment
@@ -126,6 +126,9 @@ See [`Backend/.env.example`](Backend/.env.example) for the full reference.
 For the temporary single-EC2 Kafka demo deployment, see
 [`docs/kafka-ec2.md`](docs/kafka-ec2.md) and
 [`docker-compose.kafka-ec2.yml`](docker-compose.kafka-ec2.yml).
+
+For production-safe Docker defaults and multi-platform image builds, see
+[`docs/docker-build.md`](docs/docker-build.md).
 
 ### Key variables for new features
 

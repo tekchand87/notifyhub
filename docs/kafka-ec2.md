@@ -4,12 +4,17 @@ This deployment is for the single EC2 demo broker at `13.207.193.82`. It uses
 the same `apache/kafka:4.0.1` image and KRaft configuration as NotifyHub's
 local Docker Kafka, but it is isolated in `docker-compose.kafka-ec2.yml`.
 
-The broker has two client listeners:
+The broker has three client listeners:
 
-- `kafka:29092` is internal to the Docker network and is not published on the
-  EC2 host.
-- `${KAFKA_PUBLIC_HOST}:9092` is the only published client port. Kafka metadata
-  advertises this address so remote KafkaJS clients can connect after bootstrap.
+- `kafka:29092` (`INTERNAL`) is internal to the Docker network and is not
+  published on the EC2 host. Used for container-to-container traffic only.
+- `${KAFKA_PUBLIC_HOST}:9092` (`EXTERNAL`) is published on the EC2 host and
+  advertises the public IP. Used by Mac / local development clients.
+- `${KAFKA_PRIVATE_HOST}:9094` (`PRIVATE`) is published on the EC2 host but
+  must only be reachable from within the VPC. Advertises the EC2 private IP
+  (`10.0.1.118`) so ECS API and Worker tasks receive a VPC-routable broker
+  address in Kafka metadata responses. **Do not open port 9094 to
+  `0.0.0.0/0`** — restrict it to the ECS task security group.
 
 The controller listener remains container-only. Kafka data is stored in the
 named Docker volume `notifyhub_kafka_ec2_data`.
@@ -114,11 +119,13 @@ validate these topics before consuming with group `notifyhub-workers`.
 
 ## Configure NotifyHub clients
 
-For the API and worker running outside this EC2 host, inject these values into
-their deployment environment (not into application source):
+### Mac / local development
+
+Uses the public listener on port `9092`. Inject these values into the local
+`.env` file (not into application source):
 
 ```text
-KAFKA_BROKERS=13.207.193.82:9092
+KAFKA_BROKERS=43.205.206.108:9092
 KAFKA_SSL=false
 KAFKA_SASL_MECHANISM=
 KAFKA_SASL_USERNAME=
@@ -128,7 +135,25 @@ KAFKA_DLQ_TOPIC=notifyhub.events.dlq
 KAFKA_GROUP_ID=notifyhub-workers
 ```
 
-This is a temporary plaintext demo deployment. Restrict TCP 9092 to the
-NotifyHub backend/worker security groups as already planned; do not open it to
-`0.0.0.0/0`. For production, use private networking and authenticated/TLS
-Kafka rather than exposing plaintext Kafka on a public address.
+### ECS API / Worker (Fargate)
+
+Uses the private VPC listener on port `9094`. The ECS task definition or
+Parameter Store must supply these values:
+
+```text
+KAFKA_BROKERS=10.0.1.118:9094
+KAFKA_SSL=false
+KAFKA_SASL_MECHANISM=
+KAFKA_SASL_USERNAME=
+KAFKA_SASL_PASSWORD=
+KAFKA_TOPIC=notifyhub.events
+KAFKA_DLQ_TOPIC=notifyhub.events.dlq
+KAFKA_GROUP_ID=notifyhub-workers
+```
+
+Port `9094` is VPC-internal only. The EC2 security group inbound rule for
+`9094` must use the ECS task security group ID as its source — never
+`0.0.0.0/0`. Port `9092` rules remain unchanged for public clients.
+
+This is a temporary plaintext demo deployment. For production, use private
+networking and authenticated/TLS Kafka rather than exposing plaintext Kafka.

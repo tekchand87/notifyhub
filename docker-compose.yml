@@ -148,7 +148,9 @@ services:
       - ./Backend/.env
     environment:
       # These values deliberately override host-local endpoints from .env.
-      NODE_ENV: ${DOCKER_NODE_ENV:-development}
+      # Production is the safe container default. Set DOCKER_NODE_ENV=development
+      # explicitly when using Docker for local development.
+      NODE_ENV: ${DOCKER_NODE_ENV:-production}
       PORT: 3000
       EVENT_BROKER: kafka
       MONGODB_URI: mongodb://notifyhub:notifyhub_password@mongodb:27017/notifyhub?authSource=admin&directConnection=true
@@ -202,7 +204,9 @@ services:
     env_file:
       - ./Backend/.env
     environment:
-      NODE_ENV: ${DOCKER_NODE_ENV:-development}
+      # Production is the safe container default. Set DOCKER_NODE_ENV=development
+      # explicitly when using Docker for local development.
+      NODE_ENV: ${DOCKER_NODE_ENV:-production}
       EVENT_BROKER: kafka
       MONGODB_URI: mongodb://notifyhub:notifyhub_password@mongodb:27017/notifyhub?authSource=admin&directConnection=true
       REDIS_URL: redis://redis:6379

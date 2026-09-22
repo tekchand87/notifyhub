@@ -16,7 +16,65 @@ import {
   disconnectDLQProducer,
 } from "../kafka/dlq.publisher.js";
 import { getWorkerConcurrency } from "../../modules/worker/worker.concurrency.js";
-import { logInfo } from "../../modules/worker/worker.logger.js";
+import { logInfo, logWarn } from "../../modules/worker/worker.logger.js";
+
+// KafkaJS throttles the supplied heartbeat callback to its configured
+// heartbeatInterval. Calling it from a shorter application timer keeps long
+// delivery operations from going quiet without changing KafkaJS settings.
+const APPLICATION_HEARTBEAT_INTERVAL_MS = 1_000;
+const activeHeartbeatStops = new Set();
+
+const stopActiveHeartbeats = () => {
+  for (const stop of [...activeHeartbeatStops]) stop();
+};
+
+const startHeartbeatLoop = (heartbeat) => {
+  if (typeof heartbeat !== "function") return () => {};
+
+  let stopped = false;
+  let timer = null;
+
+  const stop = () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    activeHeartbeatStops.delete(stop);
+  };
+
+  const schedule = () => {
+    if (stopped) return;
+    timer = setTimeout(async () => {
+      timer = null;
+      if (stopped) return;
+
+      try {
+        await heartbeat();
+      } catch (error) {
+        // Heartbeat failures must not alter delivery retry/DLQ semantics or
+        // create an unhandled rejection. KafkaJS will surface a fatal group
+        // error through its normal consumer lifecycle when appropriate.
+        logWarn("Kafka heartbeat failed during message processing", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        schedule();
+      }
+    }, APPLICATION_HEARTBEAT_INTERVAL_MS);
+  };
+
+  activeHeartbeatStops.add(stop);
+  schedule();
+  return stop;
+};
+
+const processKafkaMessage = async (handler, context) => {
+  const stopHeartbeat = startHeartbeatLoop(context.heartbeat);
+  try {
+    return await handler({ broker: "kafka", ...context });
+  } finally {
+    stopHeartbeat();
+  }
+};
 
 export const createEventBroker = () => ({
   mode: "kafka",
@@ -40,11 +98,12 @@ export const createEventBroker = () => ({
   async startConsumer(handler) {
     return consumer.run({
       partitionsConsumedConcurrently: getWorkerConcurrency(),
-      eachMessage: async (context) => handler({ broker: "kafka", ...context }),
+      eachMessage: (context) => processKafkaMessage(handler, context),
     });
   },
 
   async stopConsumer() {
+    stopActiveHeartbeats();
     await stopKafkaConsumer();
   },
 

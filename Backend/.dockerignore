@@ -11,6 +11,14 @@ coverage
 .env
 .env.*
 *.local
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+mongo-keyfile
+.npmrc
 dist
 build
 .cache

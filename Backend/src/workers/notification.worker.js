@@ -271,17 +271,10 @@ const boot = async () => {
   // Start the selected broker consumer loop (pass WORKER_ID for lease tracking).
   await startWorker(WORKER_ID, eventBroker);
 
-  // Auto-restart consumer if KafkaJS crashes internally (e.g. coordinator
-  // eviction after a long eachMessage handler, heartbeat timeout, etc.)
-  eventBroker.onCrash?.(async ({ payload }) => {
-    logError("Consumer crashed — attempting auto-restart", payload.error);
-    try {
-      await eventBroker.initializeWorker?.();
-      await startWorker(WORKER_ID, eventBroker);
-      logInfo("Consumer restarted successfully after crash");
-    } catch (restartErr) {
-      logError("Consumer restart failed", restartErr);
-    }
+  // KafkaJS owns consumer recovery/reconnect. Keep this listener for
+  // structured observability only; do not start another consumer here.
+  eventBroker.onCrash?.(({ payload }) => {
+    logError("Consumer crashed; KafkaJS will handle recovery", payload.error);
   });
 
 
