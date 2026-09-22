@@ -1,4 +1,4 @@
-# NotifyHub
+ # NotifyHub
 
 A multi-tenant, event-driven notification and webhook delivery platform built on Node.js, Kafka/SQS, and MongoDB.
 
